@@ -11,7 +11,9 @@ import type {
 } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
-  ?? `${window.location.protocol}//${window.location.hostname}:8000`;
+  ?? (import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : "");
 const api = axios.create({
   baseURL: apiBaseUrl,
   timeout: 15_000,

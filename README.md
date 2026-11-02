@@ -72,53 +72,37 @@ The API reads experiment settings from `config.yaml`. `POST /api/run` starts a
 background run; `GET /api/run/status` reports the stage; result and round-history
 routes serve completed or in-progress data to the dashboard. The CORS origins
 for Vite default to `config.yaml`; set `IDS_CORS_ORIGINS` to a comma-separated
-list of exact origins when deploying.
+list of exact origins only when the browser accesses the API from another
+origin.
 
-## Hosting on Hugging Face Spaces and Vercel
+## Deploy frontend and API together on Vercel
 
-The backend is configured as a Docker Space listening on port `7860`; the
-frontend is a static Vite application.
+The root `vercel.json` configures two services in one Vercel project:
 
-### Deploy the backend to Hugging Face Spaces
+- `frontend` builds the Vite application from `frontend/` and serves public
+  paths not starting with `/api/`.
+- `app` runs the FastAPI application from `backend.api:app`; public `/api/*`
+  requests are routed to it.
 
-1. Push this repository to GitHub, then create a Hugging Face Space with the
-   **Docker** SDK and connect it to the repository (or push the repository to
-   the Space). The root `Dockerfile` and this file's Space metadata configure
-   the service.
-2. In Space **Settings**, choose hardware with enough RAM and disk for the
-   dataset and Flower/Ray simulation. The simulation may exceed free hardware
-   limits; check build logs and runtime logs if the Space fails to build or run.
-3. Make the dataset available at
-   `data/raw/cicids2017_cleaned.csv`. Dataset files are git-ignored; upload the
-   file to the Space/repository separately, or use persistent Space storage
-   and update the data paths in `config.yaml` to match its mount location.
-4. Once the Vercel site is deployed, set the Space variable `IDS_CORS_ORIGINS`
-   to its exact HTTPS origin, for example `https://your-project.vercel.app`.
-   Multiple origins can be comma-separated. Do not include a trailing slash.
-5. Wait for the Space to rebuild. Check its `/health` endpoint; it should return
-   `{"status":"ok"}`.
+Import the repository into Vercel with the repository root as the project root.
+The Vercel frontend uses same-origin API paths in production, so no
+`VITE_API_BASE_URL` setting is required. Local frontend development continues
+to use the API on port `8000`; set `VITE_API_BASE_URL` only when intentionally
+connecting the browser to an API on another origin.
 
-Spaces without persistent storage can lose generated result and model files
-when the container is rebuilt or restarted. Enable persistent storage if
-available and configure `paths.results_dir`, `paths.data_report`, and
-`paths.results_file` in `config.yaml` to point inside its mount.
+The current API writes settings and experiment results to local files and
+starts training in an in-process background thread. Vercel Functions do not
+provide durable local storage or a durable background worker, so these
+operations are not reliable in this deployment as currently implemented.
+Use external persistent storage and a durable job runner (or deploy the
+stateful API on a host that supports them) before relying on settings updates
+or experiment runs in production. The API also requires the Flower/Ray
+simulation dependencies and dataset; check Vercel's Python function and build
+limits before choosing to host the API service there.
 
-### Deploy the frontend to Vercel
-
-1. Import the GitHub repository into Vercel and set **Root Directory** to
-   `frontend`.
-2. Use build command `npm run build` and output directory `dist`. Vercel
-   detects Vite automatically; `frontend/vercel.json` sends app routes to the
-   SPA entry point.
-3. Add the environment variable `VITE_API_BASE_URL` with the full Hugging Face
-   Space URL, for example `https://your-space-name.hf.space` (do not append
-   `/api`).
-4. Deploy or redeploy after setting the variable. Open the Vercel site and
-   verify dashboard data loads from the Space.
-
-This API currently has **no authentication**. Anyone who can reach the Space
-can read its data, change experiment settings, and start resource-intensive
-runs. Do not use a public Space with sensitive data or expose it for a public
+This API currently has **no authentication**. Anyone who can reach its public
+routes can read available data, change experiment settings, and start
+resource-intensive runs. Do not expose it to sensitive data or a public
 production workload without adding access control, rate limits, and run quotas.
 Generated experiment status is stored in memory and is reset whenever the
 Space process restarts; use one API process.
