@@ -66,7 +66,12 @@ with gr.Blocks(title="Adaptive Intrusion Detection Framework") as demo:
     )
 
 
-app = gr.mount_gradio_app(backend_api.app, demo, path="/")
+app = gr.mount_gradio_app(
+    backend_api.app,
+    demo,
+    path="/",
+    ssr_mode=False,
+)
 
 
 if __name__ == "__main__":

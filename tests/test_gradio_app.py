@@ -7,6 +7,9 @@ from backend import api as backend_api
 
 
 def test_gradio_interface_and_fastapi_endpoints_share_the_app():
+    assert demo.ssr_mode is False
+    assert getattr(demo, "node_process", None) is None
+
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
         assert client.get("/health").json() == {"status": "ok"}
