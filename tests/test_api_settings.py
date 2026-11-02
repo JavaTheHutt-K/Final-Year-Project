@@ -1,8 +1,11 @@
+import pandas as pd
 import yaml
 import pytest
 from fastapi import HTTPException
 
 from backend import api
+from backend.evaluate import calculate_metrics
+from backend.splitting import split_random
 
 
 @pytest.fixture
@@ -84,3 +87,41 @@ def test_update_config_rejects_split_that_does_not_total_one(editable_config):
         api.update_config(payload)
 
     assert error.value.status_code == 422
+
+
+def test_update_config_normalizes_partition_names(editable_config):
+    payload = valid_settings()
+    payload["training"]["partition"] = "CLASS_SKEWED"
+
+    saved = api.update_config(payload)
+
+    assert saved["training"]["partition"] == "class_skewed"
+
+
+def test_split_random_accepts_case_insensitive_strategy():
+    config = {
+        "dataset": {"binary_label_column": "binary_label"},
+        "split": {
+            "strategy": " STRATIFIED_RANDOM ",
+            "initial_train_fraction": 0.7,
+            "update_fraction": 0.1,
+            "test_fraction": 0.2,
+            "test_set_name": "Random holdout",
+        },
+        "training": {"random_seed": 42},
+    }
+    data = {
+        "flow_size": range(100),
+        "binary_label": [0] * 80 + [1] * 20,
+    }
+
+    initial, update, tests = split_random(pd.DataFrame(data), config)
+
+    assert len(initial) == 70
+    assert len(update) == 10
+    assert len(tests["Random holdout"]) == 20
+
+
+def test_calculate_metrics_rejects_empty_inputs():
+    with pytest.raises(ValueError, match="must not be empty"):
+        calculate_metrics([], [])

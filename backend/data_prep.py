@@ -99,9 +99,12 @@ def prepare_data(
     attack_label_column = str(dataset_config["attack_label_column"])
     binary_label_column = str(dataset_config["binary_label_column"])
     benign_label = str(dataset_config["benign_label"]).strip()
-    sample_fraction = float(dataset_config["sample_fraction"])
+    sample_fraction_value = dataset_config["sample_fraction"]
+    if isinstance(sample_fraction_value, bool):
+        raise ValueError("dataset.sample_fraction must be a finite number between 0 and 1")
+    sample_fraction = float(sample_fraction_value)
     chunk_size = int(dataset_config["chunk_size"])
-    if not 0 < sample_fraction <= 1:
+    if not np.isfinite(sample_fraction) or not 0 < sample_fraction <= 1:
         raise ValueError("dataset.sample_fraction must be greater than 0 and at most 1")
     if chunk_size < 1:
         raise ValueError("dataset.chunk_size must be a positive integer")

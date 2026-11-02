@@ -20,7 +20,8 @@ def split_random(
     """
     dataset_config = config["dataset"]
     split_config = config["split"]
-    if split_config.get("strategy") != "stratified_random":
+    strategy = str(split_config.get("strategy", "")).strip().lower()
+    if strategy != "stratified_random":
         raise ValueError("split.strategy must be 'stratified_random'")
     label_column = dataset_config["binary_label_column"]
     if label_column not in data:

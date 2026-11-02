@@ -17,6 +17,8 @@ def calculate_metrics(
     prediction = np.asarray(y_pred, dtype=np.int8).reshape(-1)
     if truth.shape != prediction.shape:
         raise ValueError("y_true and y_pred must have the same number of samples")
+    if truth.size == 0 or prediction.size == 0:
+        raise ValueError("Binary labels and predictions must not be empty")
     if not np.isin(truth, [0, 1]).all() or not np.isin(prediction, [0, 1]).all():
         raise ValueError("Binary labels and predictions must contain only 0 and 1")
 

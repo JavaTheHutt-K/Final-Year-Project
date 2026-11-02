@@ -185,7 +185,6 @@ button { cursor: pointer; }
 .alert strong { font-size: 9px; }.alert small { color: #9f7d78; font-size: 8px; }
 .alert button { padding: 5px 9px; border: 1px solid #ecd5ce; border-radius: 5px; color: #a65e54; background: #fff; font-size: 8px; }
 .spinner { width: 11px; height: 11px; border: 2px solid #ffffff73; border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
-
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: .35; } }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from math import isclose
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -11,7 +12,7 @@ from threading import Lock
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.run_experiment import run_experiment
@@ -21,6 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="intrusion-experiment")
 _state_lock = Lock()
+
+
 _run_status: dict[str, Any] = {
     "status": "idle",
     "stage": "idle",
@@ -33,17 +36,47 @@ app = FastAPI(
     title="Adaptive Intrusion Detection API",
     description="Experiment configuration, Flower training progress, and evaluation results.",
     version="0.1.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 with CONFIG_PATH.open("r", encoding="utf-8") as _config_file:
     _api_config = yaml.safe_load(_config_file)
+
+
+def _cors_origins() -> list[str]:
+    configured_origins = os.environ.get("IDS_CORS_ORIGINS", "")
+    if configured_origins.strip():
+        return [
+            origin.strip().rstrip("/")
+            for origin in configured_origins.split(",")
+            if origin.strip()
+        ]
+    return _api_config["api"]["cors_origins"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_api_config["api"]["cors_origins"],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def prevent_api_caching(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    """Provide a lightweight health check for the hosting platform."""
+    return {"status": "ok"}
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -132,7 +165,9 @@ def get_config() -> dict[str, Any]:
 
 
 @app.put("/api/config")
-def update_config(payload: dict[str, Any]) -> dict[str, Any]:
+def update_config(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     """Validate and save settings that can be changed through the dashboard."""
     editable_fields = {
         "dataset": {"sample_fraction"},
@@ -216,7 +251,8 @@ def update_config(payload: dict[str, Any]) -> dict[str, Any]:
                 status_code=422,
                 detail=f"Training {key.replace('_', ' ')} must be between {minimum} and {maximum}",
             )
-    if not isinstance(training["partition"], str) or training["partition"] not in {
+    partition_name = str(training["partition"]).strip().lower()
+    if not isinstance(training["partition"], str) or partition_name not in {
         "iid",
         "class_skewed",
     }:
@@ -224,6 +260,7 @@ def update_config(payload: dict[str, Any]) -> dict[str, Any]:
             status_code=422,
             detail="Training partition must be iid or class_skewed",
         )
+    training["partition"] = partition_name
 
     with _state_lock:
         if _run_future is not None and not _run_future.done():
@@ -290,7 +327,10 @@ def get_training_history() -> list[dict[str, Any]]:
 
 
 @app.get("/api/metrics")
-def get_metrics(model: str, test_set: str) -> dict[str, Any]:
+def get_metrics(
+    model: str,
+    test_set: str,
+) -> dict[str, Any]:
     """Return metrics for one model and the named holdout test set."""
     if model not in {
         "federated",

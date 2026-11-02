@@ -283,4 +283,8 @@ function AppLayout() {
   );
 }
 
-export default AppLayout;
+function App() {
+  return <AppLayout />;
+}
+
+export default App;

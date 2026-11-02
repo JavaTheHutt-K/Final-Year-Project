@@ -30,12 +30,13 @@ def partition_indices(
         raise ValueError("Federated training requires at least two clients")
     if len(labels) < num_clients:
         raise ValueError("Training samples must be at least the number of clients")
+    partition_name = str(partition).strip().lower()
     rng = np.random.default_rng(seed)
     indices = np.arange(len(labels))
-    if partition.lower() == "iid":
+    if partition_name == "iid":
         rng.shuffle(indices)
         shards = np.array_split(indices, num_clients)
-    elif partition.lower() in {"class_skewed", "class-skewed"}:
+    elif partition_name == "class_skewed":
         ordered = indices[np.argsort(labels, kind="stable")]
         shards = np.array_split(ordered, num_clients)
     else:

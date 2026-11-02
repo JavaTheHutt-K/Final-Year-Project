@@ -23,12 +23,18 @@ def create_model(
     penalty = str(parameters.get("penalty", "l2"))
     if penalty not in {"l2", "l1", "elasticnet"}:
         raise ValueError(f"Unsupported logistic-regression penalty: {penalty}")
+    c_value = float(parameters.get("C", 1.0))
+    eta0 = float(parameters.get("eta0", 0.01))
+    if c_value <= 0 or not np.isfinite(c_value):
+        raise ValueError("Model regularisation strength C must be positive")
+    if eta0 <= 0 or not np.isfinite(eta0):
+        raise ValueError("Model learning rate eta0 must be positive")
     estimator = SGDClassifier(
         loss="log_loss",
         penalty=penalty,
-        alpha=1.0 / float(parameters.get("C", 1.0)),
+        alpha=1.0 / c_value,
         learning_rate=str(parameters.get("learning_rate", "constant")),
-        eta0=float(parameters.get("eta0", 0.01)),
+        eta0=eta0,
         tol=None,
         random_state=random_seed,
         average=False,
