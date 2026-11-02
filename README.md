@@ -3,8 +3,9 @@ title: Adaptive IDS API
 emoji: 🛡️
 colorFrom: blue
 colorTo: indigo
-sdk: docker
-app_port: 7860
+sdk: gradio
+python_version: 3.10.13
+app_file: app.py
 ---
 
 # Adaptive Intrusion Detection Framework
@@ -13,11 +14,11 @@ This project compares federated and centralised machine-learning models on a lig
 
 ## Setup
 
-1. Use Python 3.11 and install backend dependencies:
+1. Use Python 3.11 locally and install project and test dependencies:
    ```powershell
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    ```
 2. Place `cicids2017_cleaned.csv` in `data/raw/`. The configured label field is `Attack Type`; `Normal Traffic` is treated as benign and all other labels as malicious. Dataset files are not tracked by Git.
 3. Install the frontend dependencies:
@@ -77,10 +78,24 @@ origin.
 
 ## Deploy the backend to Hugging Face Spaces
 
-The root `Dockerfile` is configured for a Docker Space using Python 3.11 and
-listening on port `7860`. Deploy the repository to a new Hugging Face Space
-with the **Docker** SDK. The Space repository needs the root `Dockerfile`,
-`requirements.txt`, `config.yaml`, and `backend/` directory.
+The Space uses the Gradio SDK and `app.py`. It mounts a Gradio interface at
+`/` while preserving the existing FastAPI endpoints under `/api/` and
+`/health`. Select ZeroGPU hardware in the Space settings. ZeroGPU currently
+supports Python 3.10.13 and 3.12.12; this project uses Python 3.10.13 there
+because `ray[default]==2.10.0` has no Python 3.12 wheels. The project
+`.python-version` remains Python 3.11 for local development and other hosts.
+
+The root `requirements.txt` contains the Space's Gradio/API and model runtime
+dependencies, including Flower and Ray so the existing experiment endpoint
+remains functional. `requirements-dev.txt` includes those dependencies plus
+`pytest` and `httpx` for testing. The root Dockerfile can also launch the same
+Gradio/FastAPI app for Docker-based hosting.
+
+The Linux Python 3.10 dependency resolution was verified with Gradio 6.31.0,
+Flower 1.13.1, and Ray 2.10.0. Keep the Space on Python 3.10.13 (or another
+Ray-supported version no newer than 3.11); do not change the pinned Ray
+version or move the ZeroGPU Space to Python 3.12 without rechecking wheel
+availability.
 
 The dataset is not tracked by Git. Make
 `data/raw/cicids2017_cleaned.csv` available to the Space before starting an
@@ -93,8 +108,10 @@ The API has no authentication. In the Space settings, set the variable
 with no trailing slash. This allows the browser dashboard to call the API from
 its separate origin. The setting is optional for local same-origin access.
 
-The API writes settings and results to local files and runs training in an
-in-process background thread. Space restarts can reset in-memory run status;
+The Space backend currently uses CPU-based scikit-learn and Ray simulation;
+ZeroGPU does not accelerate these operations. The API writes settings and
+results to local files and runs training in an in-process background thread.
+Space restarts can reset in-memory run status;
 enable persistent storage if experiment outputs should survive restarts. Keep
 one API process, and do not expose sensitive data or a public production
 workload without adding authentication, rate limits, and run quotas.
