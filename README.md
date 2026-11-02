@@ -75,30 +75,41 @@ for Vite default to `config.yaml`; set `IDS_CORS_ORIGINS` to a comma-separated
 list of exact origins only when the browser accesses the API from another
 origin.
 
-## Deploy frontend and API together on Vercel
+## Deploy the backend to Hugging Face Spaces
 
-The root `vercel.json` configures two services in one Vercel project:
+The root `Dockerfile` is configured for a Docker Space using Python 3.11 and
+listening on port `7860`. Deploy the repository to a new Hugging Face Space
+with the **Docker** SDK. The Space repository needs the root `Dockerfile`,
+`requirements.txt`, `config.yaml`, and `backend/` directory.
 
-- `frontend` builds the Vite application from `frontend/` and serves public
-  paths not starting with `/api/`.
-- `app` runs the FastAPI application from `backend.api:app`; public `/api/*`
-  requests are routed to it.
+The dataset is not tracked by Git. Make
+`data/raw/cicids2017_cleaned.csv` available to the Space before starting an
+experiment. For example, upload it to the Space repository at that path or
+configure persistent Space storage and adjust the dataset path in
+`config.yaml`.
 
-Import the repository into Vercel with the repository root as the project root.
-The Vercel frontend uses same-origin API paths in production, so no
-`VITE_API_BASE_URL` setting is required. Local frontend development continues
-to use the API on port `8000`; set `VITE_API_BASE_URL` only when intentionally
-connecting the browser to an API on another origin.
+The API has no authentication. In the Space settings, set the variable
+`IDS_CORS_ORIGINS` to the exact HTTPS origin of the deployed Vercel dashboard,
+with no trailing slash. This allows the browser dashboard to call the API from
+its separate origin. The setting is optional for local same-origin access.
 
-The current API writes settings and experiment results to local files and
-starts training in an in-process background thread. Vercel Functions do not
-provide durable local storage or a durable background worker, so these
-operations are not reliable in this deployment as currently implemented.
-Use external persistent storage and a durable job runner (or deploy the
-stateful API on a host that supports them) before relying on settings updates
-or experiment runs in production. The API also requires the Flower/Ray
-simulation dependencies and dataset; check Vercel's Python function and build
-limits before choosing to host the API service there.
+The API writes settings and results to local files and runs training in an
+in-process background thread. Space restarts can reset in-memory run status;
+enable persistent storage if experiment outputs should survive restarts. Keep
+one API process, and do not expose sensitive data or a public production
+workload without adding authentication, rate limits, and run quotas.
+
+## Deploy the frontend to Vercel
+
+The root `vercel.json` builds and serves only the Vite frontend from
+`frontend/`; the Python backend is deployed separately to Hugging Face Spaces.
+Import the repository into Vercel with the repository root as the project
+root. Set the Vercel environment variable `VITE_API_BASE_URL` to the Space's
+base URL, for example `https://your-space-name.hf.space` (do not append
+`/api`). Set it for the environments you deploy and redeploy after changing
+the value. The frontend calls the API's existing `/api/...` endpoints on that
+origin. Local frontend development continues to use the API on port `8000`
+unless `VITE_API_BASE_URL` is set.
 
 This API currently has **no authentication**. Anyone who can reach its public
 routes can read available data, change experiment settings, and start
