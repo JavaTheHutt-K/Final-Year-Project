@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+scikit-learn
+flwr[simulation]==1.13.1
+ray[default]==2.10.0
+PyYAML
+pytest
+httpx

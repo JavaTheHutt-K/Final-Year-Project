@@ -1,0 +1,26 @@
+# CICIDS2017 source data and generated experiment outputs
+data/*
+!data/raw/
+data/raw/*
+!data/raw/.gitkeep
+results/*
+!results/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

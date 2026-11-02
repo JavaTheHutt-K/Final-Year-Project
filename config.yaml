@@ -1,0 +1,58 @@
+project:
+  title: "An Adaptive Machine Learning Framework for Intrusion Detection in Ubiquitous Computing Environments"
+  description: "A comparison of federated and centralised intrusion detection using a lightweight CICIDS2017 dataset and a reproducible random holdout."
+
+paths:
+  raw_data_dir: data/raw
+  results_dir: results
+  data_report: results/data_report.json
+  results_file: results/results.json
+
+dataset:
+  source_file: cicids2017_cleaned.csv
+  chunk_size: 100000
+  label_column: Attack Type
+  benign_label: Normal Traffic
+  attack_label_column: attack_label
+  binary_label_column: binary_label
+  sample_fraction: 0.1
+
+preprocessing:
+  drop_nan_rows: true
+  drop_duplicate_rows: true
+  drop_constant_columns: true
+  scaler: standard
+
+split:
+  strategy: stratified_random
+  initial_train_fraction: 0.7
+  update_fraction: 0.1
+  test_fraction: 0.2
+  test_set_name: Random holdout
+
+model:
+  type: logistic_regression
+  hyperparameters:
+    C: 1.0
+    eta0: 0.01
+    penalty: l2
+    learning_rate: constant
+
+training:
+  random_seed: 42
+  clients: 3
+  partition: iid
+  initial_rounds: 5
+  update_rounds: 2
+  local_epochs: 1
+  aggregation: FedAvg
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+
+frontend:
+  api_base_url: http://localhost:8000
