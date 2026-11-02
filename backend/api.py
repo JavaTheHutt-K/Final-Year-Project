@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from math import isclose
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
@@ -40,7 +41,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_api_config["api"]["cors_origins"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
 
@@ -128,6 +129,124 @@ def get_config() -> dict[str, Any]:
     """Return the active root YAML configuration."""
     with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
         return yaml.safe_load(config_file)
+
+
+@app.put("/api/config")
+def update_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate and save settings that can be changed through the dashboard."""
+    editable_fields = {
+        "dataset": {"sample_fraction"},
+        "preprocessing": {
+            "drop_nan_rows",
+            "drop_duplicate_rows",
+            "drop_constant_columns",
+        },
+        "split": {
+            "initial_train_fraction",
+            "update_fraction",
+            "test_fraction",
+        },
+        "training": {
+            "random_seed",
+            "clients",
+            "initial_rounds",
+            "update_rounds",
+            "local_epochs",
+            "partition",
+        },
+    }
+    if set(payload) != set(editable_fields):
+        raise HTTPException(status_code=422, detail="Invalid settings sections")
+    for section, allowed_fields in editable_fields.items():
+        values = payload[section]
+        if not isinstance(values, dict) or set(values) != allowed_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid fields in {section} settings",
+            )
+
+    dataset = payload["dataset"]
+    sample_fraction = dataset["sample_fraction"]
+    if (
+        isinstance(sample_fraction, bool)
+        or not isinstance(sample_fraction, (int, float))
+        or not 0.01 <= sample_fraction <= 1
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset sample fraction must be between 0.01 and 1",
+        )
+
+    preprocessing = payload["preprocessing"]
+    if any(type(value) is not bool for value in preprocessing.values()):
+        raise HTTPException(
+            status_code=422,
+            detail="Preprocessing options must be true or false",
+        )
+
+    split = payload["split"]
+    fractions = (
+        split["initial_train_fraction"],
+        split["update_fraction"],
+        split["test_fraction"],
+    )
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 < value < 1
+        for value in fractions
+    ) or not isclose(sum(fractions), 1.0, abs_tol=0.001):
+        raise HTTPException(
+            status_code=422,
+            detail="Data split fractions must be between 0 and 1 and sum to 1",
+        )
+
+    training = payload["training"]
+    numeric_limits = {
+        "random_seed": (0, 4_294_967_295),
+        "clients": (1, 20),
+        "initial_rounds": (1, 100),
+        "update_rounds": (1, 100),
+        "local_epochs": (1, 20),
+    }
+    for key, (minimum, maximum) in numeric_limits.items():
+        value = training[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Training {key.replace('_', ' ')} must be between {minimum} and {maximum}",
+            )
+    if not isinstance(training["partition"], str) or training["partition"] not in {
+        "iid",
+        "class_skewed",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="Training partition must be iid or class_skewed",
+        )
+
+    with _state_lock:
+        if _run_future is not None and not _run_future.done():
+            raise HTTPException(
+                status_code=409,
+                detail="Settings cannot be changed while an experiment is running",
+            )
+        try:
+            with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+                config = yaml.safe_load(config_file)
+            for section, values in payload.items():
+                config[section].update(values)
+            temporary_path = CONFIG_PATH.with_suffix(".yaml.tmp")
+            with temporary_path.open("w", encoding="utf-8", newline="\n") as config_file:
+                yaml.safe_dump(config, config_file, sort_keys=False, allow_unicode=True)
+            temporary_path.replace(CONFIG_PATH)
+        except (OSError, yaml.YAMLError) as error:
+            logger.exception("Could not save dashboard settings")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not save settings: {error}",
+            ) from error
+    return config
 
 
 @app.get("/api/results")

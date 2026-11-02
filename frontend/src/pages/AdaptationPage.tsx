@@ -8,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS } from "../dashboardConstants";
+import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, formatModelAxisLabel } from "../dashboardConstants";
 import { useDashboard } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel } from "../components";
 
@@ -80,9 +80,9 @@ function MetricChart({
   return (
     <div className="chart-wrap chart-xl">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={chartData} margin={{ top: 13, right: 18, left: -16, bottom: 0 }}>
+        <BarChart data={chartData} margin={{ top: 13, right: 20, left: -16, bottom: 18 }}>
           <CartesianGrid stroke="#edf1f6" vertical={false} />
-          <XAxis dataKey="model" axisLine={false} tickLine={false} interval={0} tick={{ fill: "#8290a2", fontSize: 10 }} />
+          <XAxis dataKey="model" axisLine={false} tickLine={false} interval={0} tickFormatter={formatModelAxisLabel} angle={-25} textAnchor="end" height={54} tickMargin={7} tick={{ fill: "#8290a2", fontSize: 9 }} />
           <YAxis domain={[0, 1]} axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 10 }} />
           <Tooltip formatter={(value: number) => value.toFixed(4)} />
           <Bar dataKey={metric} name={metric === "f1_score" ? "F1-score" : "Recall"} radius={[5, 5, 0, 0]}>

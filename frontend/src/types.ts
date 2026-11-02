@@ -121,6 +121,30 @@ export interface ExperimentConfig {
   [section: string]: unknown;
 }
 
+export interface EditableExperimentSettings {
+  dataset: {
+    sample_fraction: number;
+  };
+  preprocessing: {
+    drop_nan_rows: boolean;
+    drop_duplicate_rows: boolean;
+    drop_constant_columns: boolean;
+  };
+  split: {
+    initial_train_fraction: number;
+    update_fraction: number;
+    test_fraction: number;
+  };
+  training: {
+    random_seed: number;
+    clients: number;
+    initial_rounds: number;
+    update_rounds: number;
+    local_epochs: number;
+    partition: "iid" | "class_skewed";
+  };
+}
+
 export interface ExperimentResults {
   config?: ExperimentConfig;
   training_history?: TrainingHistoryEntry[];

@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { getApiErrorMessage, startExperiment } from "../api";
 import { useDashboard, metricRowsFor } from "../DashboardContext";
-import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS } from "../dashboardConstants";
+import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS, formatModelAxisLabel } from "../dashboardConstants";
 import { EmptyState, MetricCard, Panel } from "../components";
 
 const ATTACK_COLORS = ["#f05252", "#ff9f43", "#f7c948", "#3588f5", "#8d62e8", "#20b98b", "#94a3b8"];
@@ -42,17 +42,22 @@ function OverviewPage() {
   const aggregate = federatedMetrics.reduce(
     (sum, entry) => ({
       total: sum.total + entry.confusion_matrix.tn + entry.confusion_matrix.fp + entry.confusion_matrix.fn + entry.confusion_matrix.tp,
-      predictedIntrusions: sum.predictedIntrusions + entry.confusion_matrix.tp + entry.confusion_matrix.fp,
-      predictedNormal: sum.predictedNormal + entry.confusion_matrix.tn + entry.confusion_matrix.fn,
+      detectedIntrusions: sum.detectedIntrusions + entry.confusion_matrix.tp,
+      normalTraffic: sum.normalTraffic + entry.confusion_matrix.tn + entry.confusion_matrix.fp,
     }),
-    { total: 0, predictedIntrusions: 0, predictedNormal: 0 },
+    { total: 0, detectedIntrusions: 0, normalTraffic: 0 },
   );
-  const trafficData = Object.entries(results?.data_report?.sources ?? {})
-    .map(([source, report]) => ({
-      source,
-      Normal: report.class_balance?.benign ?? 0,
-      Intrusion: report.class_balance?.malicious ?? 0,
-    }));
+  const trafficTotals = Object.values(results?.data_report?.sources ?? {}).reduce(
+    (totals, report) => ({
+      benign: totals.benign + (report.class_balance?.benign ?? 0),
+      malicious: totals.malicious + (report.class_balance?.malicious ?? 0),
+    }),
+    { benign: 0, malicious: 0 },
+  );
+  const trafficData = [
+    { traffic: "Normal", records: trafficTotals.benign, color: "#20b879" },
+    { traffic: "Intrusion", records: trafficTotals.malicious, color: "#f05252" },
+  ].filter((entry) => entry.records > 0);
   const benignLabel = config?.dataset?.benign_label?.trim().toUpperCase() ?? "";
   const attackCounts = Object.entries(results?.data_report?.sources ?? {})
     .reduce<Record<string, number>>((counts, [, source]) => {
@@ -66,12 +71,14 @@ function OverviewPage() {
   const attackData = Object.entries(attackCounts)
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
-  const detectionTrends = visibleTestSets.map((testSet) => ({
-    test_set: testSet,
-    Recall: results?.metrics?.federated?.[testSet]?.recall,
-    "False-positive rate": results?.metrics?.federated?.[testSet]?.false_positive_rate,
-  }));
-  const averagePerformance = MODEL_IDS.map((model) => {
+  const detectionTrends = history
+    .filter((entry) => !entry.model || entry.model === "federated")
+    .map((entry) => ({
+      round: entry.round,
+      Recall: entry.recall,
+      "False-positive rate": entry.false_positive_rate,
+    }));
+  const averagePerformance = (["centralised", "federated"] as const).map((model) => {
     const modelTestSets = visibleTestSets
       .map((testSet) => results?.metrics?.[model]?.[testSet])
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
@@ -109,25 +116,25 @@ function OverviewPage() {
   return (
     <div className="dashboard-page">
       <div className="metric-grid">
-        <MetricCard label="EVALUATED TRAFFIC" value={federatedMetrics.length ? aggregate.total.toLocaleString() : "—"} note={federatedMetrics.length ? "Records in selected test set" : "Awaiting evaluation"} accent="#2587f4" icon="⌘" />
-        <MetricCard label="DETECTED INTRUSIONS" value={federatedMetrics.length ? aggregate.predictedIntrusions.toLocaleString() : "—"} note="True + false positives" accent="#ef5350" icon="⬟" />
-        <MetricCard label="NORMAL TRAFFIC" value={federatedMetrics.length ? aggregate.predictedNormal.toLocaleString() : "—"} note="True negatives + false negatives" accent="#20ad73" icon="✓" />
-        <MetricCard label="FEDERATED CLIENTS" value={config?.training?.clients?.toLocaleString() ?? "—"} note="Configured training clients" accent="#8755ea" icon="▣" />
+        <MetricCard label="TOTAL TRAFFIC" value={federatedMetrics.length ? aggregate.total.toLocaleString() : "—"} note={federatedMetrics.length ? "Records in selected test set" : "Awaiting evaluation"} accent="#2587f4" icon="⌘" />
+        <MetricCard label="DETECTED INTRUSIONS" value={federatedMetrics.length ? aggregate.detectedIntrusions.toLocaleString() : "—"} note="Malicious records correctly detected" accent="#ef5350" icon="⬟" />
+        <MetricCard label="NORMAL TRAFFIC" value={federatedMetrics.length ? aggregate.normalTraffic.toLocaleString() : "—"} note="Benign records in selected test set" accent="#20ad73" icon="✓" />
+        <MetricCard label="ACTIVE CLIENTS" value={config?.training?.clients?.toLocaleString() ?? "—"} note="Simulated federated clients" accent="#8755ea" icon="▣" />
       </div>
 
       <div className="overview-primary-grid">
-        <Panel title="Traffic class balance" subtitle="Normal and intrusion records in the configured dataset">
+        <Panel title="Traffic class balance" subtitle="Class totals for the prepared traffic sample">
           {trafficData.length ? (
             <div className="chart-wrap chart-medium">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={trafficData} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
+                <BarChart data={trafficData} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
                   <CartesianGrid stroke="#edf1f6" vertical={false} />
-                  <XAxis dataKey="source" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 9 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 8 }} />
-                  <Tooltip />
-                  <Legend iconType="circle" />
-                  <Bar dataKey="Normal" fill="#20b879" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Intrusion" fill="#f05252" radius={[4, 4, 0, 0]} />
+                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 9 }} tickFormatter={(value: number) => value.toLocaleString()} />
+                  <YAxis type="category" dataKey="traffic" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 9 }} width={65} />
+                  <Tooltip formatter={(value: number) => value.toLocaleString()} />
+                  <Bar dataKey="records" name="Records" radius={[0, 4, 4, 0]}>
+                    {trafficData.map((entry) => <Cell key={entry.traffic} fill={entry.color} />)}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -186,15 +193,15 @@ function OverviewPage() {
           ) : <EmptyState message={loading ? "Loading model results…" : "Detection results will appear after an experiment."} />}
         </Panel>
 
-        <Panel title="Detection trends" subtitle="Federated recall and false-positive rate">
-          {detectionTrends.some((testSet) => typeof testSet.Recall === "number") ? (
+        <Panel title="Detection performance over rounds" subtitle="Federated recall and false-positive rate">
+          {detectionTrends.length ? (
             <div className="chart-wrap chart-small">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={detectionTrends} margin={{ top: 7, right: 10, left: -20, bottom: 0 }}>
                   <CartesianGrid stroke="#edf1f6" vertical={false} />
-                  <XAxis dataKey="test_set" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 8 }} />
+                  <XAxis dataKey="round" tickFormatter={(value: number) => `Round ${value}`} axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 8 }} />
                   <YAxis domain={[0, 1]} axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 8 }} />
-                  <Tooltip formatter={(value: number) => value.toFixed(4)} />
+                  <Tooltip formatter={(value: number) => value.toFixed(4)} labelFormatter={(value) => `Round ${value}`} />
                   <Legend iconType="circle" />
                   <Line type="monotone" dataKey="Recall" stroke="#20b879" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="False-positive rate" stroke="#f05252" strokeWidth={2} dot={{ r: 3 }} />
@@ -206,20 +213,19 @@ function OverviewPage() {
       </div>
 
       <div className="overview-primary-grid overview-secondary-grid">
-        <Panel title="Model performance" subtitle="Precision, recall, F1-score and false-positive rate">
+        <Panel title="Model performance" subtitle="Baseline models · precision, recall and F1-score">
           {averagePerformance.some((entry) => typeof entry.f1_score === "number") ? (
             <div className="chart-wrap chart-medium">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={averagePerformance} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <BarChart data={averagePerformance} margin={{ top: 8, right: 16, left: -20, bottom: 18 }}>
                   <CartesianGrid stroke="#edf1f6" vertical={false} />
-                  <XAxis dataKey="model" axisLine={false} tickLine={false} tick={{ fill: "#718196", fontSize: 8 }} />
+                  <XAxis dataKey="model" axisLine={false} tickLine={false} tickFormatter={formatModelAxisLabel} angle={-25} textAnchor="end" height={54} tickMargin={7} tick={{ fill: "#718196", fontSize: 8 }} />
                   <YAxis domain={[0, 1]} axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 8 }} />
                   <Tooltip formatter={(value: number) => value.toFixed(3)} />
                   <Legend iconType="circle" />
-                  <Bar dataKey="precision" name="Precision" fill="#3189f4" />
-                  <Bar dataKey="recall" name="Recall" fill="#22b879" />
+                  <Bar dataKey="precision" name="Precision" fill="#22b879" />
+                  <Bar dataKey="recall" name="Recall" fill="#ff9f43" />
                   <Bar dataKey="f1_score" name="F1-score" fill="#8d62e8" />
-                  <Bar dataKey="false_positive_rate" name="FPR" fill="#ff9f43" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -231,8 +237,8 @@ function OverviewPage() {
             <div className="table-scroll">
               <table className="data-table compact-table">
                 <thead><tr><th>Client ID</th><th>Round</th><th>Contribution</th></tr></thead>
-                <tbody>{clientRows.map(([client, contribution]) => (
-                  <tr key={client}><td>{client}</td><td>{latestRound?.round}</td><td>{typeof contribution === "number" ? contribution.toLocaleString() : "—"}</td></tr>
+                <tbody>{clientRows.map(([client, contribution], index) => (
+                  <tr key={client}><td title={client}>Client {index + 1}</td><td>{latestRound?.round}</td><td>{typeof contribution === "number" ? contribution.toLocaleString() : "—"}</td></tr>
                 ))}</tbody>
               </table>
             </div>

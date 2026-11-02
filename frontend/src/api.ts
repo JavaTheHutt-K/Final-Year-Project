@@ -1,6 +1,7 @@
 import axios from "axios";
 import type {
   ExperimentConfig,
+  EditableExperimentSettings,
   ExperimentResults,
   MetricsResponse,
   ModelId,
@@ -17,6 +18,13 @@ const api = axios.create({
 
 export async function getConfig(): Promise<ExperimentConfig> {
   const { data } = await api.get<ExperimentConfig>("/api/config");
+  return data;
+}
+
+export async function saveConfig(
+  settings: EditableExperimentSettings,
+): Promise<ExperimentConfig> {
+  const { data } = await api.put<ExperimentConfig>("/api/config", settings);
   return data;
 }
 

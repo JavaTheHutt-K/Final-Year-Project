@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS, formatMetric } from "../dashboardConstants";
+import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS, formatMetric, formatModelAxisLabel } from "../dashboardConstants";
 import { useDashboard, metricRowsFor } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel, SelectField } from "../components";
 import type { MetricName, ModelId } from "../types";
@@ -77,9 +77,9 @@ function ResultsPage() {
           {comparisonRows.length ? (
             <div className="chart-wrap chart-large">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 14, right: 12, left: -16, bottom: 0 }}>
+                <BarChart data={chartData} margin={{ top: 14, right: 18, left: -16, bottom: 18 }}>
                   <CartesianGrid stroke="#edf1f6" vertical={false} />
-                  <XAxis dataKey="model" axisLine={false} tickLine={false} interval={0} tick={{ fill: "#718196", fontSize: 10 }} />
+                  <XAxis dataKey="model" axisLine={false} tickLine={false} interval={0} tickFormatter={formatModelAxisLabel} angle={-25} textAnchor="end" height={54} tickMargin={7} tick={{ fill: "#718196", fontSize: 9 }} />
                   <YAxis domain={[0, 1]} axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 10 }} />
                   <Tooltip formatter={(value: number) => formatMetric(value)} />
                   <Bar dataKey="score" name={METRICS.find((metric) => metric.value === selectedMetric)?.label} radius={[5, 5, 0, 0]}>

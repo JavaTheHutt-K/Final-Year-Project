@@ -14,6 +14,17 @@ export const MODEL_LABELS: Record<ModelId, string> = {
   centralised_updated: "Centralised · updated",
 };
 
+export const MODEL_AXIS_LABELS: Record<string, string> = {
+  Federated: "Federated",
+  Centralised: "Centralised",
+  "Federated · updated": "Fed. + update",
+  "Centralised · updated": "Central + update",
+};
+
+export function formatModelAxisLabel(value: string): string {
+  return MODEL_AXIS_LABELS[value] ?? value;
+}
+
 export const MODEL_COLORS: Record<ModelId, string> = {
   federated: "#3878ee",
   centralised: "#16a47a",

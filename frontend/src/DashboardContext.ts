@@ -25,6 +25,12 @@ export interface DashboardContextValue {
   testSets: string[];
   selectedTestSet: string;
   setSelectedTestSet: (testSet: string) => void;
+  theme: "light" | "dark";
+  setTheme: (theme: "light" | "dark") => void;
+  autoRefresh: boolean;
+  setAutoRefresh: (enabled: boolean) => void;
+  refreshInterval: number;
+  setRefreshInterval: (seconds: number) => void;
   refreshDashboard: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 }

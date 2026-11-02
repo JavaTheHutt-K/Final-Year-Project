@@ -82,7 +82,7 @@ function TrainingPage() {
                     key={client}
                     type="monotone"
                     dataKey={(entry: TrainingHistoryEntry) => entry.clients?.[client]}
-                    name={client}
+                    name={`Client ${index + 1}`}
                     stroke={["#3878ee", "#16a47a", "#8d67db"][index % 3]}
                     strokeWidth={2}
                     dot={{ r: 3 }}

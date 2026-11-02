@@ -2,7 +2,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,11 +15,17 @@ function DatasetPage() {
   const { config, results, loading } = useDashboard();
   const report = results?.data_report;
   const sources = report?.sources ?? {};
-  const sourceData = Object.entries(sources).map(([source, item]) => ({
-    source,
-    Benign: item.class_balance?.benign ?? 0,
-    Malicious: item.class_balance?.malicious ?? 0,
-  }));
+  const classBalance = Object.values(sources).reduce(
+    (totals, item) => ({
+      Benign: totals.Benign + (item.class_balance?.benign ?? 0),
+      Malicious: totals.Malicious + (item.class_balance?.malicious ?? 0),
+    }),
+    { Benign: 0, Malicious: 0 },
+  );
+  const sourceData = [
+    { traffic: "Benign", records: classBalance.Benign },
+    { traffic: "Malicious", records: classBalance.Malicious },
+  ].filter((item) => item.records > 0);
   const partitions = Object.entries(report?.partitions ?? {});
   const attackLabels = Object.entries(sources).flatMap(([source, item]) =>
     Object.entries(item.attack_label_counts ?? {}).map(([label, count]) => ({
@@ -45,18 +51,19 @@ function DatasetPage() {
       </div>
 
       <div className="page-grid">
-        <Panel title="Class balance" subtitle="Benign and malicious records after cleaning and sampling">
+        <Panel title="Traffic class balance" subtitle="Total benign and malicious records after cleaning and sampling">
           {sourceData.length ? (
-            <div className="chart-wrap chart-large">
+            <div className="chart-wrap chart-large traffic-balance-chart">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sourceData} margin={{ top: 12, right: 16, left: -18, bottom: 0 }}>
+                <BarChart data={sourceData} layout="vertical" margin={{ top: 8, right: 20, left: 10, bottom: 8 }}>
                   <CartesianGrid stroke="#edf1f6" vertical={false} />
-                  <XAxis dataKey="source" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 11 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 11 }} />
-                  <Tooltip />
-                  <Legend iconType="circle" />
-                  <Bar dataKey="Benign" fill="#3878ee" radius={[5, 5, 0, 0]} />
-                  <Bar dataKey="Malicious" fill="#e5a13c" radius={[5, 5, 0, 0]} />
+                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 10 }} tickFormatter={(value: number) => value.toLocaleString()} />
+                  <YAxis type="category" dataKey="traffic" axisLine={false} tickLine={false} tick={{ fill: "#8290a2", fontSize: 10 }} width={75} />
+                  <Tooltip formatter={(value: number) => value.toLocaleString()} />
+                  <Bar dataKey="records" name="Records" radius={[0, 5, 5, 0]}>
+                    <Cell fill="#20b879" />
+                    <Cell fill="#f05252" />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>

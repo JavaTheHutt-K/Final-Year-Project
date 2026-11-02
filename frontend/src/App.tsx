@@ -58,6 +58,16 @@ function AppLayout() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedTestSet, setSelectedTestSet] = useState("");
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    localStorage.getItem("dashboard-theme") === "dark" ? "dark" : "light",
+  );
+  const [autoRefresh, setAutoRefresh] = useState(
+    () => localStorage.getItem("dashboard-auto-refresh") !== "false",
+  );
+  const [refreshInterval, setRefreshInterval] = useState(() => {
+    const savedInterval = Number(localStorage.getItem("dashboard-refresh-interval"));
+    return [15, 30, 60].includes(savedInterval) ? savedInterval : 30;
+  });
   const location = useLocation();
 
   const refreshDashboard = useCallback(async () => {
@@ -106,13 +116,23 @@ function AppLayout() {
   }, [refreshDashboard, refreshStatus]);
 
   useEffect(() => {
-    if (!running) return undefined;
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("dashboard-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("dashboard-auto-refresh", String(autoRefresh));
+    localStorage.setItem("dashboard-refresh-interval", String(refreshInterval));
+  }, [autoRefresh, refreshInterval]);
+
+  useEffect(() => {
+    if (!running && !autoRefresh) return undefined;
     const timer = window.setInterval(() => {
       void refreshStatus();
-      void refreshDashboard();
-    }, 2500);
+      if (autoRefresh) void refreshDashboard();
+    }, refreshInterval * 1000);
     return () => window.clearInterval(timer);
-  }, [running, refreshDashboard, refreshStatus]);
+  }, [autoRefresh, refreshInterval, running, refreshDashboard, refreshStatus]);
 
   const testSets = useMemo(
     () => {
@@ -135,6 +155,12 @@ function AppLayout() {
       testSets,
       selectedTestSet,
       setSelectedTestSet,
+      theme,
+      setTheme,
+      autoRefresh,
+      setAutoRefresh,
+      refreshInterval,
+      setRefreshInterval,
       refreshDashboard,
       refreshStatus,
     }),
@@ -148,6 +174,9 @@ function AppLayout() {
       error,
       testSets,
       selectedTestSet,
+      theme,
+      autoRefresh,
+      refreshInterval,
       refreshDashboard,
       refreshStatus,
     ],
@@ -160,7 +189,7 @@ function AppLayout() {
 
   return (
     <DashboardContext.Provider value={value}>
-      <div className="app-shell">
+      <div className={`app-shell theme-${theme}`}>
         <aside className="sidebar">
           <Link className="brand" to="/" aria-label="Intrusion Detection dashboard">
             <span className="brand-mark" aria-hidden="true">
@@ -209,23 +238,39 @@ function AppLayout() {
                 <span className="calendar-icon">▣</span>
                 <select
                   aria-label="Test set"
+                  title="Filter dashboard data by test set"
                   value={selectedTestSet}
                   onChange={(event) => setSelectedTestSet(event.target.value)}
                 >
                   <option value="">All test sets</option>
                   {testSets.map((testSet) => <option key={testSet} value={testSet}>{testSet}</option>)}
                 </select>
-                <i>⌄</i>
               </label>
-              <button className="topbar-icon-button" aria-label="Refresh dashboard data" onClick={() => void refreshDashboard()} disabled={loading}>
-                ↻
+              <button
+                className={`topbar-icon-button ${loading ? "is-refreshing" : ""}`}
+                aria-label={loading ? "Refreshing dashboard data" : "Refresh dashboard data"}
+                aria-busy={loading}
+                title={loading ? "Refreshing dashboard data" : "Refresh dashboard data"}
+                onClick={() => void refreshDashboard()}
+                disabled={loading}
+              >
+                <span aria-hidden="true">↻</span>
               </button>
-              <Link className="notification-button" to="/detections" aria-label="View detection results">
+              <Link
+                className="notification-button"
+                to="/detections"
+                aria-label={totalClassificationErrors > 0
+                  ? `View detection results; ${totalClassificationErrors.toLocaleString()} classification errors`
+                  : "View detection results"}
+                title={totalClassificationErrors > 0
+                  ? `${totalClassificationErrors.toLocaleString()} classification errors`
+                  : "No classification errors recorded"}
+              >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></svg>
                 {totalClassificationErrors > 0 && <i />}
               </Link>
-              <Link className="profile-link" to="/settings" aria-label="Open settings">
-                <span className="avatar">IDS</span><span className="profile-label">System</span><i>⌄</i>
+              <Link className="profile-link" to="/settings" aria-label="Open dashboard settings" title="Dashboard settings">
+                <span className="avatar">IDS</span><span className="profile-label">Settings</span>
               </Link>
             </div>
           </header>
