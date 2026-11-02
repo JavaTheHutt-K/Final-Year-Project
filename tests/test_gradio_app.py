@@ -2,7 +2,7 @@ from concurrent.futures import Future
 
 from fastapi.testclient import TestClient
 
-from app import app, demo, start_experiment
+from app import app, check_gpu_availability, demo, start_experiment
 from backend import api as backend_api
 
 
@@ -14,6 +14,13 @@ def test_gradio_interface_and_fastapi_endpoints_share_the_app():
         assert client.get("/").status_code == 200
         assert client.get("/health").json() == {"status": "ok"}
         assert client.get("/api/run/status").status_code == 200
+
+
+def test_zero_gpu_check_is_registered_as_gradio_event():
+    assert any(
+        function.fn is check_gpu_availability
+        for function in demo.fns.values()
+    )
 
 
 def test_gradio_start_button_uses_existing_background_task(monkeypatch):

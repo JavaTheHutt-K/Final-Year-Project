@@ -1,4 +1,6 @@
 gradio
+spaces
+torch==2.8.0
 fastapi
 uvicorn[standard]
 pandas

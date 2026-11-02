@@ -3,9 +3,17 @@
 import os
 
 import gradio as gr
+import spaces
 import uvicorn
 
 from backend import api as backend_api
+
+
+@spaces.GPU(duration=10)
+def check_gpu_availability():
+    import torch
+
+    return {"cuda_available": torch.cuda.is_available()}
 
 
 def refresh_backend_state():
@@ -32,7 +40,9 @@ with gr.Blocks(title="Adaptive Intrusion Detection Framework") as demo:
     with gr.Row():
         refresh_button = gr.Button("Refresh backend data")
         start_button = gr.Button("Start experiment", variant="primary")
+        gpu_check_button = gr.Button("Check GPU availability")
     start_output = gr.JSON(label="Start response")
+    gpu_status_output = gr.JSON(label="GPU status")
 
     with gr.Tab("Status and training history"):
         status_output = gr.JSON(label="Run status")
@@ -54,6 +64,10 @@ with gr.Blocks(title="Adaptive Intrusion Detection Framework") as demo:
     start_button.click(
         start_experiment,
         outputs=[start_output, status_output],
+    )
+    gpu_check_button.click(
+        check_gpu_availability,
+        outputs=gpu_status_output,
     )
 
     timer = gr.Timer(5)
