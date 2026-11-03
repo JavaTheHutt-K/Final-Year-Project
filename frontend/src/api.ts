@@ -103,3 +103,15 @@ export function getApiErrorMessage(error: unknown): string {
   }
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
+
+export interface AiInsightsResponse {
+  run_id: string;
+  model: string;
+  insights: string;
+}
+
+export async function generateAiInsights(): Promise<AiInsightsResponse> {
+  const { data } = await api.post<AiInsightsResponse>("/api/insights");
+  return data;
+}
+

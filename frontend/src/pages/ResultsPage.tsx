@@ -13,11 +13,15 @@ import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS, formatMetric, formatMod
 import { useDashboard, metricRowsFor } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel, SelectField } from "../components";
 import type { MetricName, ModelId } from "../types";
+import { generateAiInsights } from "../api";
 
 function ResultsPage() {
   const { results, testSets, selectedTestSet, setSelectedTestSet, loading } = useDashboard();
   const [selectedMetric, setSelectedMetric] = useState<MetricName>("f1_score");
   const [selectedModel, setSelectedModel] = useState<ModelId>("federated");
+  const [aiInsights, setAiInsights] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
   const activeTestSet = selectedTestSet || testSets[0] || "";
   const rows = useMemo(() => metricRowsFor(results, MODEL_IDS), [results]);
   const comparisonRows = rows.filter((row) => row.testSet === activeTestSet);
@@ -32,6 +36,25 @@ function ResultsPage() {
   });
   const matrix = results?.metrics?.[selectedModel]?.[activeTestSet]?.confusion_matrix;
   const attackRecalls = results?.metrics?.[selectedModel]?.[activeTestSet]?.attack_type_recall;
+
+  const handleGenerateInsights = async () => {
+    setAiLoading(true);
+    setAiError("");
+    setAiInsights("");
+
+    try {
+      const response = await generateAiInsights();
+      setAiInsights(response.insights);
+    } catch (error) {
+      setAiError(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate AI insights. Please try again."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const exportCsv = () => {
     if (!rows.length) return;
@@ -67,6 +90,38 @@ function ResultsPage() {
         description="Compare model metrics on the random holdout set and inspect confusion matrices."
         action={<button className="button button-outline" onClick={exportCsv} disabled={!rows.length}>↓ <span>Export CSV</span></button>}
       />
+      <Panel
+        title="AI-powered evaluation insights"
+        subtitle="Gemini analyses the latest completed experiment using its recorded metrics."
+      >
+        <button
+          className="button button-outline"
+          onClick={handleGenerateInsights}
+          disabled={aiLoading}
+        >
+          {aiLoading ? "Analysing results..." : "Generate AI Insights"}
+        </button>
+
+        {aiError && (
+          <p role="alert" style={{ color: "#dc2626", marginTop: 12 }}>
+            {aiError}
+          </p>
+        )}
+
+        {aiInsights && (
+          <div
+            aria-live="polite"
+            style={{
+              marginTop: 16,
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.7,
+              overflowWrap: "anywhere"
+            }}
+          >
+            {aiInsights}
+          </div>
+        )}
+      </Panel>
       <div className="filter-bar">
         <SelectField label="TEST SET" value={activeTestSet} options={testSets.map((testSet) => ({ value: testSet, label: testSet }))} onChange={setSelectedTestSet} />
         <SelectField label="METRIC" value={selectedMetric} options={METRICS.map((metric) => ({ value: metric.value, label: metric.label }))} onChange={(value) => setSelectedMetric(value as MetricName)} />
