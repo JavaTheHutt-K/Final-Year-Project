@@ -21,6 +21,8 @@ from backend.data_prep import (
     fit_feature_scaler,
     load_config,
     prepare_data,
+    _resolve_output_dir,
+    _resolve_output_path,
     save_data_report,
     transform_features,
 )
@@ -239,9 +241,7 @@ def run_experiment(
             )
 
     root = config_file.parent
-    results_dir = Path(config["paths"]["results_dir"])
-    if not results_dir.is_absolute():
-        results_dir = root / results_dir
+    results_dir = _resolve_output_dir(root, config["paths"]["results_dir"])
     results_dir.mkdir(parents=True, exist_ok=True)
 
     artifact_dir = results_dir / "models"
@@ -276,9 +276,7 @@ def run_experiment(
             "test_rows": int(sum(len(frame) for frame in test_data.values())),
         },
     }
-    results_path = Path(config["paths"]["results_file"])
-    if not results_path.is_absolute():
-        results_path = root / results_path
+    results_path = _resolve_output_path(root, config["paths"]["results_file"])
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

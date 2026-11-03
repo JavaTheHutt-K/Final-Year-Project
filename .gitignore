@@ -24,3 +24,8 @@ frontend/*.tsbuildinfo
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local environment variables and credentials
+.env
+.env.*
+!.env.example

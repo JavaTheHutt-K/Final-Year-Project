@@ -3,13 +3,11 @@
 import os
 
 import gradio as gr
-import spaces
 import uvicorn
 
 from backend import api as backend_api
 
 
-@spaces.GPU(duration=10)
 def check_gpu_availability():
     import torch
 

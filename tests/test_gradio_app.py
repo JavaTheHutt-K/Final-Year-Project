@@ -1,4 +1,6 @@
-from concurrent.futures import Future
+import sys
+from concurrent.futures import Future, ThreadPoolExecutor
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -16,11 +18,18 @@ def test_gradio_interface_and_fastapi_endpoints_share_the_app():
         assert client.get("/api/run/status").status_code == 200
 
 
-def test_zero_gpu_check_is_registered_as_gradio_event():
+def test_gpu_check_is_registered_and_uses_cuda_availability(monkeypatch):
     assert any(
         function.fn is check_gpu_availability
         for function in demo.fns.values()
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+    )
+
+    assert check_gpu_availability() == {"cuda_available": False}
 
 
 def test_gradio_start_button_uses_existing_background_task(monkeypatch):
@@ -32,7 +41,9 @@ def test_gradio_start_button_uses_existing_background_task(monkeypatch):
         submissions.append((function, args, kwargs))
         return future
 
-    monkeypatch.setattr(backend_api._executor, "submit", fake_submit)
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(backend_api, "_executor", executor)
+    monkeypatch.setattr(executor, "submit", fake_submit)
     monkeypatch.setattr(backend_api, "_run_future", None)
     monkeypatch.setattr(backend_api, "_run_status", {
         "status": "idle",

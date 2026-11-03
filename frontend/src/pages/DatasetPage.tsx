@@ -15,6 +15,7 @@ function DatasetPage() {
   const { config, results, loading } = useDashboard();
   const report = results?.data_report;
   const sources = report?.sources ?? {};
+  const sourceEntries = Object.entries(sources);
   const classBalance = Object.values(sources).reduce(
     (totals, item) => ({
       Benign: totals.Benign + (item.class_balance?.benign ?? 0),
@@ -27,9 +28,9 @@ function DatasetPage() {
     { traffic: "Malicious", records: classBalance.Malicious },
   ].filter((item) => item.records > 0);
   const partitions = Object.entries(report?.partitions ?? {});
-  const attackLabels = Object.entries(sources).flatMap(([source, item]) =>
+  const attackLabels = sourceEntries.flatMap(([, item], sourceIndex) =>
     Object.entries(item.attack_label_counts ?? {}).map(([label, count]) => ({
-      source,
+      source: `Source ${sourceIndex + 1}`,
       label,
       count,
     })),
@@ -75,15 +76,18 @@ function DatasetPage() {
             <div className="table-scroll">
               <table className="data-table">
                 <thead><tr><th>Source</th><th>Before</th><th>After NaNs</th><th>After duplicates</th><th>Sampled</th></tr></thead>
-                <tbody>{Object.entries(sources).map(([source, item]) => (
-                  <tr key={source}>
-                    <td><span className="day-indicator" />{source}</td>
-                    <td>{item.rows.before?.toLocaleString() ?? "—"}</td>
-                    <td>{item.rows.after_nan_rows?.toLocaleString() ?? "—"}</td>
-                    <td>{item.rows.after_duplicate_rows?.toLocaleString() ?? "—"}</td>
-                    <td>{item.rows.after_sampling?.toLocaleString() ?? "—"}</td>
-                  </tr>
-                ))}</tbody>
+                <tbody>{sourceEntries.map(([, item], sourceIndex) => {
+                  const source = `Source ${sourceIndex + 1}`;
+                  return (
+                    <tr key={source}>
+                      <td><span className="day-indicator" />{source}</td>
+                      <td>{item.rows.before?.toLocaleString() ?? "—"}</td>
+                      <td>{item.rows.after_nan_rows?.toLocaleString() ?? "—"}</td>
+                      <td>{item.rows.after_duplicate_rows?.toLocaleString() ?? "—"}</td>
+                      <td>{item.rows.after_sampling?.toLocaleString() ?? "—"}</td>
+                    </tr>
+                  );
+                })}</tbody>
               </table>
               <div className="table-footnote">
                 Sample fraction: {report?.config?.sample_fraction ?? config?.dataset?.sample_fraction ?? "—"} ·

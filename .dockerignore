@@ -8,3 +8,11 @@ frontend
 tests
 results
 data/
+.env
+.env.*
+!.env.example
+*.csv
+*.joblib
+*.pkl
+.idea
+.vscode

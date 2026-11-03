@@ -12,6 +12,9 @@ app_file: app.py
 
 This project compares federated and centralised machine-learning models on a lightweight combined CICIDS2017 dataset, with and without a training update. Since the lightweight file has no capture-day metadata, it uses a reproducible stratified random split instead of a Monday–Friday comparison. All experiment settings are defined in the root `config.yaml`.
 
+For Google Cloud Run backend deployment with the React/Vite frontend hosted on
+Vercel, see [README_DEPLOYMENT.md](README_DEPLOYMENT.md).
+
 ## Setup
 
 1. Use Python 3.11 locally and install project and test dependencies:
@@ -71,69 +74,28 @@ python -m backend.api
 
 The API reads experiment settings from `config.yaml`. `POST /api/run` starts a
 background run; `GET /api/run/status` reports the stage; result and round-history
-routes serve completed or in-progress data to the dashboard. The CORS origins
-for Vite default to `config.yaml`; set `IDS_CORS_ORIGINS` to a comma-separated
-list of exact origins only when the browser accesses the API from another
-origin.
-
-## Deploy the backend to Hugging Face Spaces
-
-The Space uses the Gradio SDK and `app.py`. It mounts a Gradio interface at
-`/` while preserving the existing FastAPI endpoints under `/api/` and
-`/health`. Select ZeroGPU hardware in the Space settings. ZeroGPU currently
-supports Python 3.10.13 and 3.12.12; this project uses Python 3.10.13 there
-because `ray[default]==2.10.0` has no Python 3.12 wheels. The project
-`.python-version` remains Python 3.11 for local development and other hosts.
-
-The root `requirements.txt` contains the Space's Gradio/API and model runtime
-dependencies, including Flower and Ray so the existing experiment endpoint
-remains functional. `requirements-dev.txt` includes those dependencies plus
-`pytest` and `httpx` for testing. The root Dockerfile can also launch the same
-Gradio/FastAPI app for Docker-based hosting.
-
-The Linux Python 3.10 dependency resolution was verified with Gradio 6.31.0,
-Flower 1.13.1, and Ray 2.10.0. Keep the Space on Python 3.10.13 (or another
-Ray-supported version no newer than 3.11); do not change the pinned Ray
-version or move the ZeroGPU Space to Python 3.12 without rechecking wheel
-availability.
-
-The dataset is not tracked by Git. Make
-`data/raw/cicids2017_cleaned.csv` available to the Space before starting an
-experiment. For example, upload it to the Space repository at that path or
-configure persistent Space storage and adjust the dataset path in
-`config.yaml`.
-
-The API has no authentication. In the Space settings, set the variable
-`IDS_CORS_ORIGINS` to the exact HTTPS origin of the deployed Vercel dashboard,
-with no trailing slash. This allows the browser dashboard to call the API from
-its separate origin. The setting is optional for local same-origin access.
-
-The Space backend currently uses CPU-based scikit-learn and Ray simulation;
-ZeroGPU does not accelerate these operations. The API writes settings and
-results to local files and runs training in an in-process background thread.
-Space restarts can reset in-memory run status;
-enable persistent storage if experiment outputs should survive restarts. Keep
-one API process, and do not expose sensitive data or a public production
-workload without adding authentication, rate limits, and run quotas.
+routes serve completed or in-progress data to the dashboard. Configure the
+browser origin with `FRONTEND_URL`, or use `IDS_CORS_ORIGINS` for a comma-separated
+list of exact origins. For Cloud Run deployment configuration and limitations, see
+[README_DEPLOYMENT.md](README_DEPLOYMENT.md).
 
 ## Deploy the frontend to Vercel
 
 The root `vercel.json` builds and serves only the Vite frontend from
-`frontend/`; the Python backend is deployed separately to Hugging Face Spaces.
+`frontend/`; the Python backend is deployed separately to Google Cloud Run.
 Import the repository into Vercel with the repository root as the project
-root. Set the Vercel environment variable `VITE_API_BASE_URL` to the Space's
-base URL, for example `https://your-space-name.hf.space` (do not append
-`/api`). Set it for the environments you deploy and redeploy after changing
-the value. The frontend calls the API's existing `/api/...` endpoints on that
-origin. Local frontend development continues to use the API on port `8000`
-unless `VITE_API_BASE_URL` is set.
+root. Set the Vercel environment variable `VITE_API_BASE_URL` to the Cloud Run
+service URL (do not append `/api`). Set it for the environments you deploy and
+redeploy after changing the value. The frontend calls the API's existing
+`/api/...` endpoints on that origin. Local frontend development continues to
+use the API on port `8000` unless `VITE_API_BASE_URL` is set.
 
 This API currently has **no authentication**. Anyone who can reach its public
 routes can read available data, change experiment settings, and start
 resource-intensive runs. Do not expose it to sensitive data or a public
 production workload without adding access control, rate limits, and run quotas.
 Generated experiment status is stored in memory and is reset whenever the
-Space process restarts; use one API process.
+Cloud Run instance restarts; use one API process.
 
 ## Run the dashboard
 

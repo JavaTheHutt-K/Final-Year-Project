@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,22 @@ def _resolve_path(root: Path, configured_path: str) -> Path:
     """Resolve a configured path relative to the project root."""
     path = Path(configured_path)
     return path if path.is_absolute() else root / path
+
+
+def _resolve_output_path(root: Path, configured_path: str) -> Path:
+    """Resolve an output path, honoring the container's temporary output dir."""
+    results_dir = os.environ.get("IDS_RESULTS_DIR")
+    if results_dir:
+        return Path(results_dir) / Path(configured_path).name
+    return _resolve_path(root, configured_path)
+
+
+def _resolve_output_dir(root: Path, configured_path: str) -> Path:
+    """Resolve the output directory, honoring the container's temporary dir."""
+    results_dir = os.environ.get("IDS_RESULTS_DIR")
+    if results_dir:
+        return Path(results_dir)
+    return _resolve_path(root, configured_path)
 
 
 def _clean_chunk(
@@ -72,7 +89,7 @@ def save_data_report(report: dict[str, Any], config_path: str | Path) -> None:
     """Write the cleaning and partition report to its configured result path."""
     config = load_config(config_path)
     root = Path(config_path).resolve().parent
-    report_path = _resolve_path(root, config["paths"]["data_report"])
+    report_path = _resolve_output_path(root, config["paths"]["data_report"])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as report_file:
         json.dump(report, report_file, indent=2)
@@ -90,7 +107,10 @@ def prepare_data(
     project_root = Path(config_path).resolve().parent
     dataset_config = config["dataset"]
     preprocessing_config = config["preprocessing"]
-    raw_dir = _resolve_path(project_root, config["paths"]["raw_data_dir"])
+    raw_dir = _resolve_path(
+        project_root,
+        os.environ.get("IDS_DATA_DIR", config["paths"]["raw_data_dir"]),
+    )
     csv_path = _resolve_path(raw_dir, dataset_config["source_file"])
     if not csv_path.is_file():
         raise FileNotFoundError(f"Configured dataset file was not found: {csv_path}")

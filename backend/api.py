@@ -5,22 +5,30 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from math import isclose
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.data_prep import _resolve_output_path
 from backend.run_experiment import run_experiment
+from backend.settings import DatabaseSettings
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.yaml"
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="intrusion-experiment")
+CONFIG_PATH = Path(os.environ.get("IDS_CONFIG_PATH", PROJECT_ROOT / "config.yaml"))
+_executor: ThreadPoolExecutor | None = None
 _state_lock = Lock()
 
 
@@ -32,6 +40,36 @@ _run_status: dict[str, Any] = {
 _live_training_history: list[dict[str, Any]] = []
 _run_future: Future[dict[str, Any]] | None = None
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Create the run worker with the ASGI app and release it on shutdown."""
+    global _executor
+    with _state_lock:
+        if _executor is None:
+            _executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="intrusion-experiment",
+            )
+    logger.info("Adaptive Intrusion Detection API started")
+    try:
+        yield
+    finally:
+        with _state_lock:
+            executor = _executor
+            _executor = None
+            active_run = _run_future is not None and not _run_future.done()
+            if active_run and _run_future is not None:
+                _run_future.cancel()
+        if active_run:
+            logger.warning(
+                "An experiment was active during shutdown and may be interrupted"
+            )
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        logger.info("Adaptive Intrusion Detection API stopped")
+
+
 app = FastAPI(
     title="Adaptive Intrusion Detection API",
     description="Experiment configuration, Flower training progress, and evaluation results.",
@@ -39,21 +77,44 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    lifespan=lifespan,
 )
+app.state.database_settings = DatabaseSettings.from_environment()
 
 with CONFIG_PATH.open("r", encoding="utf-8") as _config_file:
     _api_config = yaml.safe_load(_config_file)
 
 
 def _cors_origins() -> list[str]:
-    configured_origins = os.environ.get("IDS_CORS_ORIGINS", "")
+    configured_origins = (
+        os.environ.get("FRONTEND_URL", "").strip()
+        or os.environ.get("IDS_CORS_ORIGINS", "")
+    )
     if configured_origins.strip():
-        return [
+        origins = [
             origin.strip().rstrip("/")
             for origin in configured_origins.split(",")
             if origin.strip()
         ]
-    return _api_config["api"]["cors_origins"]
+    else:
+        origins = _api_config["api"]["cors_origins"]
+
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if (
+            origin == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(
+                "CORS origins must be exact http(s) origins without paths or credentials"
+            )
+    return origins
 
 
 app.add_middleware(
@@ -90,7 +151,7 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         logger.exception("Could not read backend output file %s", path)
         raise HTTPException(
             status_code=500,
-            detail=f"Could not read {path.name}: {error}",
+            detail="Could not read the requested result file.",
         ) from error
     if not isinstance(data, dict):
         raise HTTPException(
@@ -101,13 +162,11 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 
 
 def _results_path() -> Path:
-    configured = Path(_api_config["paths"]["results_file"])
-    return configured if configured.is_absolute() else PROJECT_ROOT / configured
+    return _resolve_output_path(PROJECT_ROOT, _api_config["paths"]["results_file"])
 
 
 def _report_path() -> Path:
-    configured = Path(_api_config["paths"]["data_report"])
-    return configured if configured.is_absolute() else PROJECT_ROOT / configured
+    return _resolve_output_path(PROJECT_ROOT, _api_config["paths"]["data_report"])
 
 
 def _run_progress(stage: str, detail: dict[str, Any]) -> None:
@@ -148,7 +207,7 @@ def _execute_experiment() -> dict[str, Any]:
                     "status": "failed",
                     "stage": "failed",
                     "message": "Experiment failed.",
-                    "error": str(error),
+                    "error": "Experiment failed. Check service logs for details.",
                 }
             )
         raise
@@ -281,7 +340,7 @@ def update_config(
             logger.exception("Could not save dashboard settings")
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not save settings: {error}",
+                detail="Could not save settings.",
             ) from error
     return config
 
@@ -354,7 +413,7 @@ def get_metrics(
 @app.post("/api/run", status_code=202)
 def start_run() -> dict[str, str]:
     """Start an experiment in the background without blocking the API."""
-    global _run_future, _live_training_history
+    global _executor, _run_future, _live_training_history
     with _state_lock:
         if _run_future is not None and not _run_future.done():
             raise HTTPException(status_code=409, detail="An experiment is already running")
@@ -369,6 +428,11 @@ def start_run() -> dict[str, str]:
             }
         )
         _live_training_history = []
+        if _executor is None:
+            _executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="intrusion-experiment",
+            )
         _run_future = _executor.submit(_execute_experiment)
     return {"status": "running", "message": "Experiment started in the background."}
 
@@ -385,6 +449,6 @@ if __name__ == "__main__":
 
     uvicorn.run(
         app,
-        host=str(_api_config["api"]["host"]),
-        port=int(_api_config["api"]["port"]),
+        host=os.environ.get("HOST", str(_api_config["api"]["host"])),
+        port=int(os.environ.get("PORT", _api_config["api"]["port"])),
     )

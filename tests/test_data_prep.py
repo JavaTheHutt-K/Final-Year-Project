@@ -3,7 +3,7 @@
 import pandas as pd
 import yaml
 
-from backend.data_prep import prepare_data
+from backend.data_prep import _resolve_output_dir, prepare_data
 
 
 def test_prepare_data_cleans_labels_in_chunks_and_reports_counts(tmp_path) -> None:
@@ -54,3 +54,14 @@ def test_prepare_data_cleans_labels_in_chunks_and_reports_counts(tmp_path) -> No
     assert report["sources"]["sample.csv"]["rows"]["after_nan_rows"] == 4
     assert report["sources"]["sample.csv"]["rows"]["after_duplicate_rows"] == 3
     assert (tmp_path / "results" / "data_report.json").is_file()
+
+
+def test_output_directory_can_be_redirected_to_temporary_storage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    configured_output = tmp_path / "results"
+    temporary_output = tmp_path / "temporary-results"
+    monkeypatch.setenv("IDS_RESULTS_DIR", str(temporary_output))
+
+    assert _resolve_output_dir(tmp_path, str(configured_output)) == temporary_output
