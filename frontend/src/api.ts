@@ -14,11 +14,42 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.DEV
     ? `${window.location.protocol}//${window.location.hostname}:8000`
     : "");
+
 const api = axios.create({
   baseURL: apiBaseUrl,
   timeout: 15_000,
   headers: { "Content-Type": "application/json" },
 });
+
+api.interceptors.request.use((config) => {
+  const token = sessionStorage.getItem("ids-admin-token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      error.response?.status === 401 &&
+      !error.config?.url?.includes("/api/auth/login")
+    ) {
+      sessionStorage.removeItem("ids-admin-token");
+      window.dispatchEvent(new Event("ids-auth-expired"));
+    }
+    return Promise.reject(error);
+  },
+);
+
+export async function login(password: string): Promise<void> {
+  const { data } = await api.post<{ access_token: string }>(
+    "/api/auth/login",
+    { password },
+  );
+  sessionStorage.setItem("ids-admin-token", data.access_token);
+}
 
 export async function getConfig(): Promise<ExperimentConfig> {
   const { data } = await api.get<ExperimentConfig>("/api/config");

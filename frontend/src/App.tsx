@@ -8,6 +8,7 @@ import {
 import {
   getApiErrorMessage,
   getConfig,
+  login,
   getResults,
   getRunStatus,
   getTrainingHistory,
@@ -49,7 +50,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/settings": "Settings",
 };
 
-function AppLayout() {
+function AppLayout({ onLogout }: { onLogout: () => void }) {
   const [config, setConfig] = useState<ExperimentConfig | null>(null);
   const [results, setResults] = useState<ExperimentResults | null>(null);
   const [history, setHistory] = useState<TrainingHistoryEntry[]>([]);
@@ -272,6 +273,15 @@ function AppLayout() {
               <Link className="profile-link" to="/settings" aria-label="Open dashboard settings" title="Dashboard settings">
                 <span className="avatar">IDS</span><span className="profile-label">Settings</span>
               </Link>
+              <button
+                className="topbar-icon-button"
+                type="button"
+                onClick={onLogout}
+                aria-label="Log out"
+                title="Log out"
+              >
+                ↪
+              </button>
             </div>
           </header>
           <div className="content-wrap">
@@ -283,8 +293,133 @@ function AppLayout() {
   );
 }
 
+function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+
+    try {
+      await onLogin(password);
+    } catch (loginError) {
+      setError(getApiErrorMessage(loginError));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main style={{
+      minHeight: "100vh",
+      display: "grid",
+      placeItems: "center",
+      padding: "24px",
+      background: "var(--page-bg, #f3f6fb)",
+    }}>
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          width: "100%",
+          maxWidth: "400px",
+          padding: "36px",
+          borderRadius: "16px",
+          background: "var(--card-bg, #ffffff)",
+          boxShadow: "0 12px 40px rgba(20, 35, 60, 0.10)",
+        }}
+      >
+        <div style={{ fontSize: "30px", marginBottom: "12px" }}>🛡️</div>
+        <h1 style={{ margin: "0 0 8px", fontSize: "24px" }}>
+          Administrator Login
+        </h1>
+        <p style={{ margin: "0 0 28px", color: "var(--muted, #64748b)" }}>
+          Sign in to access the Intrusion Detection dashboard.
+        </p>
+
+        <label htmlFor="admin-password" style={{
+          display: "block",
+          marginBottom: "8px",
+          fontWeight: 600,
+        }}>
+          Administrator password
+        </label>
+
+        <input
+          id="admin-password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          autoFocus
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "13px",
+            border: "1px solid #cbd5e1",
+            borderRadius: "8px",
+            fontSize: "15px",
+            marginBottom: "16px",
+          }}
+        />
+
+        {error && (
+          <p role="alert" style={{ color: "#dc2626", fontSize: "14px" }}>
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting || !password}
+          style={{
+            width: "100%",
+            padding: "13px",
+            border: 0,
+            borderRadius: "8px",
+            background: "#2563eb",
+            color: "white",
+            fontWeight: 600,
+            cursor: submitting ? "wait" : "pointer",
+            opacity: submitting || !password ? 0.65 : 1,
+          }}
+        >
+          {submitting ? "Signing in..." : "Sign in"}
+        </button>
+      </form>
+    </main>
+  );
+}
+
 function App() {
-  return <AppLayout />;
+  const [authenticated, setAuthenticated] = useState(
+    () => Boolean(sessionStorage.getItem("ids-admin-token")),
+  );
+
+  useEffect(() => {
+    const handleExpired = () => setAuthenticated(false);
+    window.addEventListener("ids-auth-expired", handleExpired);
+    return () => window.removeEventListener("ids-auth-expired", handleExpired);
+  }, []);
+
+  async function handleLogin(password: string) {
+    await login(password);
+    setAuthenticated(true);
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem("ids-admin-token");
+    setAuthenticated(false);
+  }
+
+  if (!authenticated) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  return <AppLayout onLogout={handleLogout} />;
 }
 
 export default App;
