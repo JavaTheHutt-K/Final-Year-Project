@@ -79,6 +79,15 @@ browser origin with `FRONTEND_URL`, or use `IDS_CORS_ORIGINS` for a comma-separa
 list of exact origins. For Cloud Run deployment configuration and limitations, see
 [README_DEPLOYMENT.md](README_DEPLOYMENT.md).
 
+The results page can optionally request an AI explanation of a completed
+centralised-versus-federated comparison. Configure `AI_API_KEY` on the backend
+(and optionally `AI_MODEL` and `AI_BASE_URL`) to enable it. The request sends only
+the selected test set's summary metrics to an OpenAI-compatible chat completions
+endpoint; it does not send the dataset or model artifacts. AI analysis is
+user-triggered, is unavailable during an experiment, and never changes measured
+metrics or model training. Without the API key, normal experiment and dashboard
+functionality remains available.
+
 ## Deploy the frontend to Vercel
 
 The root `vercel.json` builds and serves only the Vite frontend from

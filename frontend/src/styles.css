@@ -105,6 +105,10 @@ button { cursor: pointer; }
 .panel-heading { display: flex; min-height: 39px; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .panel-heading h2 { margin: 0; color: #263a53; font: 700 12px Manrope,sans-serif; }
 .panel-heading p { margin: 5px 0 0; color: #96a2b1; font-size: 8px; }
+.ai-analysis-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.ai-analysis-note { color: #8996a6; font-size: 8px; }
+.ai-analysis-content { margin-top: 13px; padding: 13px; border: 1px solid #e8edf3; border-radius: 7px; color: #52647a; font-size: 9px; line-height: 1.7; white-space: pre-wrap; }
+.ai-analysis-error { color: #b45858; font-size: 9px; }
 .chart-wrap { width: 100%; }
 .chart-medium { height: 235px; margin-top: 12px; }
 .chart-large { height: 300px; margin-top: 12px; }

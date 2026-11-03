@@ -6,16 +6,20 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from math import isclose
 from concurrent.futures import Future, ThreadPoolExecutor
+from math import isclose
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request as URLRequest
+from urllib.request import urlopen
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from backend.data_prep import _resolve_output_path
 from backend.run_experiment import run_experiment
@@ -39,6 +43,11 @@ _run_status: dict[str, Any] = {
 }
 _live_training_history: list[dict[str, Any]] = []
 _run_future: Future[dict[str, Any]] | None = None
+_ai_comparison_active = False
+
+
+class AIComparisonRequest(BaseModel):
+    test_set: str = Field(min_length=1, max_length=120)
 
 
 @asynccontextmanager
@@ -410,11 +419,161 @@ def get_metrics(
     return {"model": model, "test_set": test_set, **metrics}
 
 
+@app.post("/api/ai/compare")
+def compare_with_ai(payload: AIComparisonRequest) -> dict[str, str]:
+    """Request a post-run AI interpretation of saved metrics only."""
+    global _ai_comparison_active
+    with _state_lock:
+        if _run_status["status"] == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="AI comparison is unavailable while an experiment is running.",
+            )
+        if _ai_comparison_active:
+            raise HTTPException(
+                status_code=409,
+                detail="Another AI comparison is already in progress.",
+            )
+        _ai_comparison_active = True
+    try:
+        return _request_ai_comparison(payload)
+    finally:
+        with _state_lock:
+            _ai_comparison_active = False
+
+
+def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
+    api_key = os.environ.get("AI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="AI comparison is not configured. Set AI_API_KEY on the backend.",
+        )
+    provider_url = os.environ.get(
+        "AI_BASE_URL",
+        "https://api.openai.com/v1/chat/completions",
+    ).strip()
+    parsed_provider_url = urlsplit(provider_url)
+    if parsed_provider_url.scheme not in {"http", "https"} or not parsed_provider_url.netloc:
+        raise HTTPException(
+            status_code=500,
+            detail="AI_BASE_URL must be an absolute HTTP(S) chat completions URL.",
+        )
+
+    results = _load_json(_results_path())
+    if results is None:
+        raise HTTPException(status_code=404, detail="No experiment results are available")
+
+    model_names = {
+        "centralised": "Centralised",
+        "federated": "Federated",
+        "centralised_updated": "Centralised (updated)",
+        "federated_updated": "Federated (updated)",
+    }
+    metrics_by_model = results.get("metrics", {})
+    comparison: dict[str, Any] = {}
+    for model, label in model_names.items():
+        metrics = metrics_by_model.get(model, {}).get(payload.test_set)
+        if metrics is not None:
+            comparison[label] = {
+                name: metrics[name]
+                for name in (
+                    "precision",
+                    "recall",
+                    "f1_score",
+                    "false_positive_rate",
+                    "confusion_matrix",
+                )
+                if name in metrics
+            }
+
+    if not {"Centralised", "Federated"}.issubset(comparison):
+        raise HTTPException(
+            status_code=404,
+            detail="Both centralised and federated metrics are required for this test set.",
+        )
+
+    prompt = {
+        "test_set": payload.test_set,
+        "metrics": comparison,
+    }
+    request_body = json.dumps(
+        {
+            "model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Interpret the supplied intrusion-detection evaluation "
+                        "metrics. Compare centralised and federated approaches, "
+                        "including updated variants if present. Explain tradeoffs "
+                        "using only the supplied metrics, pay particular attention "
+                        "to recall and false negatives, and do not claim statistical "
+                        "significance or infer causes. State that these are measured "
+                        "results and your text is an interpretation. Be concise."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            "temperature": 0.2,
+        }
+    ).encode("utf-8")
+    request = URLRequest(
+        provider_url,
+        data=request_body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        logger.warning("AI comparison provider returned HTTP %s", error.code)
+        raise HTTPException(
+            status_code=502,
+            detail="The AI comparison provider rejected the request.",
+        ) from error
+    except (
+        URLError,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        logger.warning("Could not complete AI comparison request: %s", error)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not get an AI comparison. Please try again later.",
+        ) from error
+
+    try:
+        analysis = response_data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        logger.warning("AI comparison provider returned an invalid response")
+        raise HTTPException(
+            status_code=502,
+            detail="The AI comparison provider returned an invalid response.",
+        ) from error
+    if not isinstance(analysis, str) or not analysis.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="The AI comparison provider returned an empty analysis.",
+        )
+    return {"test_set": payload.test_set, "analysis": analysis.strip()}
+
+
 @app.post("/api/run", status_code=202)
 def start_run() -> dict[str, str]:
     """Start an experiment in the background without blocking the API."""
     global _executor, _run_future, _live_training_history
     with _state_lock:
+        if _ai_comparison_active:
+            raise HTTPException(
+                status_code=409,
+                detail="An experiment cannot start during an AI comparison.",
+            )
         if _run_future is not None and not _run_future.done():
             raise HTTPException(status_code=409, detail="An experiment is already running")
         for key in ("model", "round", "clients"):

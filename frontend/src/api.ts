@@ -83,6 +83,17 @@ export async function getMetrics(
   return data;
 }
 
+export async function getAIComparison(
+  testSet: string,
+): Promise<{ test_set: string; analysis: string }> {
+  const { data } = await api.post<{ test_set: string; analysis: string }>(
+    "/api/ai/compare",
+    { test_set: testSet },
+    { timeout: 45_000 },
+  );
+  return data;
+}
+
 export async function startExperiment(): Promise<RunResponse> {
   const { data } = await api.post<RunResponse>("/api/run");
   return data;
