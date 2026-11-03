@@ -9,7 +9,7 @@ port. The Vite frontend remains a separate Vercel deployment.
 - The FastAPI instance is `backend.api.app`; `app.py` mounts the Gradio
   dashboard on that same application and exports the ASGI application as
   `app`.
-- Existing API routes are unchanged:
+- API routes include:
 
   | Method | Path | Purpose |
   | --- | --- | --- |
@@ -19,6 +19,7 @@ port. The Vite frontend remains a separate Vercel deployment.
   | GET | `/api/results` | Read results |
   | GET | `/api/training-history` | Read round history |
   | GET | `/api/metrics?model=...&test_set=...` | Read model metrics |
+  | POST | `/api/ai/compare` | Request an optional post-run AI interpretation |
   | POST | `/api/run` | Queue an experiment in the API process |
   | GET | `/api/run/status` | Read in-process run status |
 
@@ -72,6 +73,25 @@ service and `http://localhost:8080/` for the Gradio dashboard.
 5. Keep one Uvicorn worker. Run status, active training history, and
    configuration edits are held in process memory or local files and are not
    shared across Cloud Run instances.
+6. To enable the optional results-page AI interpretation, set `AI_API_KEY` as
+   a backend secret. Optionally set `AI_MODEL` and `AI_BASE_URL` for the
+   OpenAI-compatible chat completions provider. Do not set these as `VITE_*`
+   variables. The user-triggered endpoint sends summary metrics only and rejects
+   requests while an experiment is running.
+
+For an existing deployment, add the provider key to Google Cloud Secret Manager,
+then update the Cloud Run service to expose that secret as the `AI_API_KEY`
+environment variable. The Cloud Run service account needs permission to access
+the secret. Alternatively, configure it through the Cloud Run service's
+Variables & secrets settings. Never put the provider key in Vercel environment
+variables or frontend code.
+
+Deploy the updated frontend to Vercel so the results page shows the AI comparison
+button, and deploy the updated backend to Cloud Run so it serves
+`POST /api/ai/compare`. Keep the existing `VITE_API_BASE_URL` pointed at the
+Cloud Run service URL. No AI key or new Vercel variable is needed; without
+`AI_API_KEY` on Cloud Run, the rest of the dashboard and experiment continue to
+work normally.
 
 For example, the following shows the relevant Cloud Run deployment options;
 replace the project, region, bucket, and image values with your own:
