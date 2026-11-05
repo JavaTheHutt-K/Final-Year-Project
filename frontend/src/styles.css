@@ -109,6 +109,15 @@ button { cursor: pointer; }
 .ai-analysis-note { color: #8996a6; font-size: 8px; }
 .ai-analysis-content { margin-top: 13px; padding: 13px; border: 1px solid #e8edf3; border-radius: 7px; color: #52647a; font-size: 9px; line-height: 1.7; white-space: pre-wrap; }
 .ai-analysis-error { color: #b45858; font-size: 9px; }
+.insights-page { max-width: 1050px; margin: 0 auto; }
+.insights-page .page-heading { margin-bottom: 30px; }
+.insights-panel { min-height: 230px; padding: 25px 27px; }
+.insights-panel .panel-heading { margin-bottom: 19px; }
+.insights-panel .panel-heading h2 { font-size: 15px; }
+.insights-panel .panel-heading p { font-size: 10px; }
+.insights-content { min-height: 120px; padding: 20px; font-size: 13px; line-height: 1.85; }
+.insights-hint { margin: 25px 0 6px; color: #8996a6; font-size: 11px; }
+.insights-empty .empty-chart { min-height: 130px; }
 .chart-wrap { width: 100%; }
 .chart-medium { height: 235px; margin-top: 12px; }
 .chart-large { height: 300px; margin-top: 12px; }

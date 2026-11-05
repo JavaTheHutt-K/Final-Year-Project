@@ -9,24 +9,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { getAIComparison, getApiErrorMessage, generateAiInsights } from "../api";
 import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, METRICS, formatMetric, formatModelAxisLabel } from "../dashboardConstants";
 import { useDashboard, metricRowsFor } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel, SelectField } from "../components";
 import type { MetricName, ModelId } from "../types";
 
 function ResultsPage() {
-  const { results, testSets, selectedTestSet, setSelectedTestSet, loading, running } = useDashboard();
+  const { results, testSets, selectedTestSet, setSelectedTestSet, loading } = useDashboard();
   const [selectedMetric, setSelectedMetric] = useState<MetricName>("f1_score");
   const [selectedModel, setSelectedModel] = useState<ModelId>("federated");
-  const [aiInsights, setAiInsights] = useState("");
-  const [aiComparison, setAiComparison] = useState<{
-    testSet: string;
-    analysis: string;
-  } | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiComparisonError, setAiComparisonError] = useState<string | null>(null);
-  const [aiInsightsError, setAiInsightsError] = useState("");
   const activeTestSet = selectedTestSet || testSets[0] || "";
   const rows = useMemo(() => metricRowsFor(results, MODEL_IDS), [results]);
   const comparisonRows = rows.filter((row) => row.testSet === activeTestSet);
@@ -41,41 +32,6 @@ function ResultsPage() {
   });
   const matrix = results?.metrics?.[selectedModel]?.[activeTestSet]?.confusion_matrix;
   const attackRecalls = results?.metrics?.[selectedModel]?.[activeTestSet]?.attack_type_recall;
-  const canCompare = comparisonRows.some((row) => row.model === "centralised")
-    && comparisonRows.some((row) => row.model === "federated");
-
-  const generateAIComparison = async () => {
-    setAiLoading(true);
-    setAiComparisonError(null);
-    try {
-      const response = await getAIComparison(activeTestSet);
-      setAiComparison({ testSet: response.test_set, analysis: response.analysis });
-    } catch (error) {
-      setAiComparisonError(getApiErrorMessage(error));
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const handleGenerateInsights = async () => {
-    setAiLoading(true);
-    setAiInsightsError("");
-    setAiInsights("");
-
-    try {
-      const response = await generateAiInsights();
-      setAiInsights(response.insights);
-    } catch (error) {
-      setAiInsightsError(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate AI insights. Please try again."
-      );
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
   const exportCsv = () => {
     if (!rows.length) return;
     const header = ["model", "test_set", "precision", "recall", "f1_score", "false_positive_rate", "tn", "fp", "fn", "tp"];
@@ -110,38 +66,6 @@ function ResultsPage() {
         description="Compare model metrics on the random holdout set and inspect confusion matrices."
         action={<button className="button button-outline" onClick={exportCsv} disabled={!rows.length}>↓ <span>Export CSV</span></button>}
       />
-      <Panel
-        title="AI-powered evaluation insights"
-        subtitle="Gemini analyses the latest completed experiment using its recorded metrics."
-      >
-        <button
-          className="button button-outline"
-          onClick={handleGenerateInsights}
-          disabled={aiLoading}
-        >
-          {aiLoading ? "Analysing results..." : "Generate AI Insights"}
-        </button>
-
-        {aiInsightsError && (
-          <p role="alert" style={{ color: "#dc2626", marginTop: 12 }}>
-            {aiInsightsError}
-          </p>
-        )}
-
-        {aiInsights && (
-          <div
-            aria-live="polite"
-            style={{
-              marginTop: 16,
-              whiteSpace: "pre-wrap",
-              lineHeight: 1.7,
-              overflowWrap: "anywhere"
-            }}
-          >
-            {aiInsights}
-          </div>
-        )}
-      </Panel>
       <div className="filter-bar">
         <SelectField label="TEST SET" value={activeTestSet} options={testSets.map((testSet) => ({ value: testSet, label: testSet }))} onChange={setSelectedTestSet} />
         <SelectField label="METRIC" value={selectedMetric} options={METRICS.map((metric) => ({ value: metric.value, label: metric.label }))} onChange={(value) => setSelectedMetric(value as MetricName)} />
@@ -197,27 +121,6 @@ function ResultsPage() {
             <div className="table-footnote">False-positive rate = FP / (FP + TN).</div>
           </div>
         ) : <EmptyState message={loading ? "Loading results…" : "Results will appear after evaluation."} />}
-      </Panel>
-      <Panel title="AI interpretation" subtitle="Optional explanation of the saved evaluation metrics">
-        <div className="ai-analysis-controls">
-          <button
-            className="button button-primary"
-            onClick={generateAIComparison}
-            disabled={!canCompare || running || aiLoading}
-          >
-            {aiLoading ? "Generating…" : "Generate AI comparison"}
-          </button>
-          <span className="ai-analysis-note">
-            Sends summary metrics only; AI does not train models or change scores.
-          </span>
-        </div>
-        {aiComparisonError && <p className="ai-analysis-error" role="alert">{aiComparisonError}</p>}
-        {aiComparison?.testSet === activeTestSet && (
-          <div className="ai-analysis-content" aria-live="polite">{aiComparison.analysis}</div>
-        )}
-        {!canCompare && !loading && (
-          <p className="ai-analysis-note">A completed centralised and federated comparison is required.</p>
-        )}
       </Panel>
       {attackRecalls && Object.keys(attackRecalls).length > 0 && (
         <Panel title="Recall by attack type" subtitle={`${MODEL_LABELS[selectedModel]} · ${activeTestSet}`}>
