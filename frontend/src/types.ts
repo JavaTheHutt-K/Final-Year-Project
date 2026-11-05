@@ -162,7 +162,8 @@ export interface ExperimentResults {
 }
 
 export interface RunStatus {
-  status: "idle" | "running" | "completed" | "failed" | string;
+  status: "idle" | "queued" | "running" | "completed" | "failed" | "unavailable";
+  run_id?: string | null;
   stage?: string;
   message?: string;
   error?: string;
@@ -172,7 +173,9 @@ export interface RunStatus {
 }
 
 export interface RunResponse {
-  status: string;
+  id?: string;
+  run_id?: string;
+  status: "queued" | "running";
   message?: string;
 }
 

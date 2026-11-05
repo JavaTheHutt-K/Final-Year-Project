@@ -244,8 +244,8 @@ function OverviewPage() {
             </div>
           ) : <EmptyState message={loading ? "Loading client updates…" : "Client contribution details are not included in the available training history."} />}
           <div className="run-status-inline">
-            <span className={`status-pill status-${status.status}`}><i />{running ? "Training" : status.status === "completed" ? "Complete" : status.status === "failed" ? "Failed" : "Ready"}</span>
-            <button className="button button-primary" disabled={running} onClick={() => void run()}>{running ? "Running" : "Run model"}</button>
+            <span className={`status-pill status-${status.status}`}><i />{status.status === "queued" ? "Queued" : status.status === "running" ? "Training" : status.status === "completed" ? "Complete" : status.status === "failed" ? "Failed" : status.status === "unavailable" ? "Unavailable" : "Ready"}</span>
+            <button className="button button-primary" disabled={running} onClick={() => void run()}>{status.status === "queued" ? "Queued" : status.status === "running" ? "Running" : "Run model"}</button>
             {runError && <small className="status-error-text">{runError}</small>}
           </div>
         </Panel>

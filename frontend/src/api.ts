@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 import type {
   ExperimentConfig,
   EditableExperimentSettings,
@@ -21,34 +21,74 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+const ADMIN_TOKEN_KEY = "ids-admin-token";
+const AUTH_EXPIRED_EVENT = "ids-auth-expired";
+
+interface LoginResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+}
+
+function isProtectedRequest(config: InternalAxiosRequestConfig): boolean {
+  const method = config.method?.toUpperCase();
+  const path = new URL(config.url ?? "", config.baseURL || window.location.origin).pathname;
+  return (
+    (method === "PUT" && path === "/api/config") ||
+    (method === "POST" &&
+      ["/api/run", "/api/ai/compare", "/api/insights"].includes(path))
+  );
+}
+
+function expireAdminSession(): void {
+  sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
 api.interceptors.request.use((config) => {
-  const token = sessionStorage.getItem("ids-admin-token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  if (!isProtectedRequest(config)) return config;
+  const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+  if (!token) {
+    expireAdminSession();
+    return Promise.reject(new Error("Administrator login is required."));
   }
+  config.headers.set("Authorization", `Bearer ${token}`);
   return config;
 });
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  (error: AxiosError<{ detail?: string | Record<string, unknown>; message?: string }>) => {
     if (
-      error.response?.status === 401 &&
-      !error.config?.url?.includes("/api/auth/login")
+      error.config &&
+      isProtectedRequest(error.config as InternalAxiosRequestConfig) &&
+      (error.response?.status === 401 || error.response?.status === 403)
     ) {
-      sessionStorage.removeItem("ids-admin-token");
-      window.dispatchEvent(new Event("ids-auth-expired"));
+      expireAdminSession();
     }
     return Promise.reject(error);
   },
 );
 
 export async function login(password: string): Promise<void> {
-  const { data } = await api.post<{ access_token: string }>(
-    "/api/auth/login",
-    { password },
-  );
-  sessionStorage.setItem("ids-admin-token", data.access_token);
+  const { data } = await api.post<LoginResponse>("/api/auth/login", { password });
+  if (
+    typeof data.access_token !== "string" ||
+    !data.access_token ||
+    typeof data.token_type !== "string" ||
+    data.token_type.toLowerCase() !== "bearer"
+  ) {
+    throw new Error("The server returned an invalid administrator login response.");
+  }
+  sessionStorage.setItem(ADMIN_TOKEN_KEY, data.access_token);
+}
+
+export function hasAdminSession(): boolean {
+  return Boolean(sessionStorage.getItem(ADMIN_TOKEN_KEY));
+}
+
+export function logout(): void {
+  sessionStorage.removeItem(ADMIN_TOKEN_KEY);
 }
 
 export async function getConfig(): Promise<ExperimentConfig> {
@@ -105,13 +145,28 @@ export async function getRunStatus(): Promise<RunStatus> {
 }
 
 export function getApiErrorMessage(error: unknown): string {
-  if (axios.isAxiosError<{ detail?: string; message?: string }>(error)) {
-    return (
-      error.response?.data?.detail ??
-      error.response?.data?.message ??
-      error.message
-    );
+  if (axios.isAxiosError<{ detail?: unknown; message?: unknown }>(error)) {
+    if (!error.response) return "Could not reach the backend. Check your connection and try again.";
+    const detail = error.response.data?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object" && "msg" in item && typeof item.msg === "string") {
+            return item.msg;
+          }
+          return "";
+        })
+        .filter(Boolean);
+      if (messages.length) return messages.join("; ");
+    }
+    if (typeof error.response.data?.message === "string") return error.response.data.message;
+    if (error.response.status === 401) return "Your administrator session is invalid or has expired. Please sign in again.";
+    if (error.response.status === 403) return "You are not authorized to perform this action.";
+    return error.message || `The backend returned HTTP ${error.response.status}.`;
   }
+  if (error instanceof SyntaxError) return "The backend returned an invalid response.";
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
 
@@ -125,4 +180,3 @@ export async function generateAiInsights(): Promise<AiInsightsResponse> {
   const { data } = await api.post<AiInsightsResponse>("/api/insights");
   return data;
 }
-

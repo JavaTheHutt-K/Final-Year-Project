@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Link,
   NavLink,
@@ -8,10 +8,12 @@ import {
 import {
   getApiErrorMessage,
   getConfig,
-  login,
   getResults,
   getRunStatus,
   getTrainingHistory,
+  hasAdminSession,
+  login,
+  logout,
 } from "./api";
 import {
   DashboardContext,
@@ -104,7 +106,7 @@ function AppLayout({ onLogout }: { onLogout: () => void }) {
     try {
       const nextStatus = await getRunStatus();
       setStatus(nextStatus);
-      setRunning(nextStatus.status === "running");
+      setRunning(nextStatus.status === "queued" || nextStatus.status === "running");
     } catch (requestError) {
       setStatus({
         status: "unavailable",
@@ -295,16 +297,23 @@ function AppLayout({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
+function LoginScreen({
+  notice,
+  onLogin,
+}: {
+  notice: string;
+  onLogin: (password: string) => Promise<void>;
+}) {
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(notice);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  useEffect(() => setError(notice), [notice]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setSubmitting(true);
-
     try {
       await onLogin(password);
     } catch (loginError) {
@@ -333,9 +342,8 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
           Private administrator access
         </div>
       </section>
-
       <section className="login-panel" aria-label="Administrator sign in">
-        <form className="login-card" onSubmit={handleSubmit}>
+        <form className="login-card" onSubmit={(event) => void handleSubmit(event)}>
           <div className="login-card-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path d="M12 3 19 6v5c0 4.7-2.9 8-7 10-4.1-2-7-5.3-7-10V6l7-3Z" />
@@ -344,10 +352,7 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
           </div>
           <p className="login-card-eyebrow">ADMINISTRATOR ACCESS</p>
           <h2>Welcome back</h2>
-          <p className="login-card-copy">
-            Sign in to open your intrusion detection dashboard.
-          </p>
-
+          <p className="login-card-copy">Sign in to open your intrusion detection dashboard.</p>
           <label htmlFor="admin-password">Administrator password</label>
           <input
             id="admin-password"
@@ -359,24 +364,13 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
             required
             autoFocus
           />
-
-          {error && (
-            <p className="login-error" role="alert">
-              {error}
-            </p>
-          )}
-
-          <button
-            className="login-submit"
-            type="submit"
-            disabled={submitting || !password}
-          >
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <button className="login-submit" type="submit" disabled={submitting || !password}>
             {submitting ? "Signing in..." : "Sign in"}
             <span aria-hidden="true">→</span>
           </button>
           <p className="login-card-footnote">
-            <span aria-hidden="true">🔒</span> Protected access for authorized
-            administrators
+            <span aria-hidden="true">🔒</span> Protected access for authorized administrators
           </p>
         </form>
       </section>
@@ -385,30 +379,34 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
 }
 
 function App() {
-  const [authenticated, setAuthenticated] = useState(
-    () => Boolean(sessionStorage.getItem("ids-admin-token")),
-  );
+  const [authenticated, setAuthenticated] = useState(hasAdminSession);
+  const [loginNotice, setLoginNotice] = useState("");
 
   useEffect(() => {
-    const handleExpired = () => setAuthenticated(false);
+    const handleExpired = () => {
+      logout();
+      setAuthenticated(false);
+      setLoginNotice("Your administrator session expired. Please sign in again.");
+    };
     window.addEventListener("ids-auth-expired", handleExpired);
     return () => window.removeEventListener("ids-auth-expired", handleExpired);
   }, []);
 
   async function handleLogin(password: string) {
     await login(password);
+    setLoginNotice("");
     setAuthenticated(true);
   }
 
   function handleLogout() {
-    sessionStorage.removeItem("ids-admin-token");
+    logout();
+    setLoginNotice("You have been signed out.");
     setAuthenticated(false);
   }
 
   if (!authenticated) {
-    return <LoginScreen onLogin={handleLogin} />;
+    return <LoginScreen notice={loginNotice} onLogin={handleLogin} />;
   }
-
   return <AppLayout onLogout={handleLogout} />;
 }
 
