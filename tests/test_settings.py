@@ -18,3 +18,15 @@ def test_database_settings_are_optional(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     assert DatabaseSettings.from_environment() == DatabaseSettings(None, None, None)
+
+
+def test_database_settings_treat_blank_values_as_missing(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "   ")
+    monkeypatch.setenv("SUPABASE_URL", " https://example.supabase.co ")
+    monkeypatch.setenv("SUPABASE_KEY", "   ")
+
+    settings = DatabaseSettings.from_environment()
+
+    assert settings.database_url is None
+    assert settings.supabase_url == "https://example.supabase.co"
+    assert settings.supabase_key is None

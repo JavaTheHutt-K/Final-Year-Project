@@ -8,6 +8,15 @@ import uvicorn
 from backend import api as backend_api
 
 
+def _optional_env(name: str, default: str | None = None) -> str | None:
+    """Return a trimmed environment value or the fallback when blank."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value if value else default
+
+
 def check_gpu_availability():
     import torch
 
@@ -90,5 +99,5 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", "7860")),
+        port=int(_optional_env("PORT") or "7860"),
     )

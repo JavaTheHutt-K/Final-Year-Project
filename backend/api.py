@@ -25,13 +25,25 @@ from backend.data_prep import _resolve_output_path
 from backend.run_experiment import run_experiment
 from backend.settings import DatabaseSettings
 
+
+def _optional_env(name: str, default: str | None = None) -> str | None:
+    """Return a trimmed environment value or the default when the variable is blank."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value if value else default
+
+
 logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    level=(_optional_env("LOG_LEVEL", "INFO") or "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get("IDS_CONFIG_PATH", PROJECT_ROOT / "config.yaml"))
+
+
+CONFIG_PATH = Path(_optional_env("IDS_CONFIG_PATH") or PROJECT_ROOT / "config.yaml")
 _executor: ThreadPoolExecutor | None = None
 _state_lock = Lock()
 
@@ -449,10 +461,11 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
             status_code=503,
             detail="AI comparison is not configured. Set AI_API_KEY on the backend.",
         )
-    provider_url = os.environ.get(
+    provider_url = _optional_env(
         "AI_BASE_URL",
         "https://api.openai.com/v1/chat/completions",
-    ).strip()
+    )
+    provider_url = provider_url.strip()
     parsed_provider_url = urlsplit(provider_url)
     if parsed_provider_url.scheme not in {"http", "https"} or not parsed_provider_url.netloc:
         raise HTTPException(
@@ -499,7 +512,7 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
     }
     request_body = json.dumps(
         {
-            "model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+            "model": _optional_env("AI_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
             "messages": [
                 {
                     "role": "system",
@@ -608,6 +621,6 @@ if __name__ == "__main__":
 
     uvicorn.run(
         app,
-        host=os.environ.get("HOST", str(_api_config["api"]["host"])),
-        port=int(os.environ.get("PORT", _api_config["api"]["port"])),
+        host=_optional_env("HOST") or str(_api_config["api"]["host"]),
+        port=int(_optional_env("PORT") or _api_config["api"]["port"]),
     )

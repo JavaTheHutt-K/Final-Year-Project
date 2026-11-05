@@ -29,9 +29,18 @@ def _resolve_path(root: Path, configured_path: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _optional_path_env(name: str) -> str | None:
+    """Return a trimmed environment value or None when the variable is blank."""
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _resolve_output_path(root: Path, configured_path: str) -> Path:
     """Resolve an output path, honoring the container's temporary output dir."""
-    results_dir = os.environ.get("IDS_RESULTS_DIR")
+    results_dir = _optional_path_env("IDS_RESULTS_DIR")
     if results_dir:
         return Path(results_dir) / Path(configured_path).name
     return _resolve_path(root, configured_path)
@@ -39,7 +48,7 @@ def _resolve_output_path(root: Path, configured_path: str) -> Path:
 
 def _resolve_output_dir(root: Path, configured_path: str) -> Path:
     """Resolve the output directory, honoring the container's temporary dir."""
-    results_dir = os.environ.get("IDS_RESULTS_DIR")
+    results_dir = _optional_path_env("IDS_RESULTS_DIR")
     if results_dir:
         return Path(results_dir)
     return _resolve_path(root, configured_path)
@@ -107,9 +116,10 @@ def prepare_data(
     project_root = Path(config_path).resolve().parent
     dataset_config = config["dataset"]
     preprocessing_config = config["preprocessing"]
+    raw_dir_value = _optional_path_env("IDS_DATA_DIR")
     raw_dir = _resolve_path(
         project_root,
-        os.environ.get("IDS_DATA_DIR", config["paths"]["raw_data_dir"]),
+        raw_dir_value or config["paths"]["raw_data_dir"],
     )
     csv_path = _resolve_path(raw_dir, dataset_config["source_file"])
     if not csv_path.is_file():
