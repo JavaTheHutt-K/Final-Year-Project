@@ -313,83 +313,71 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
   }
 
   return (
-    <main style={{
-      minHeight: "100vh",
-      display: "grid",
-      placeItems: "center",
-      padding: "24px",
-      background: "var(--page-bg, #f3f6fb)",
-    }}>
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          width: "100%",
-          maxWidth: "400px",
-          padding: "36px",
-          borderRadius: "16px",
-          background: "var(--card-bg, #ffffff)",
-          boxShadow: "0 12px 40px rgba(20, 35, 60, 0.10)",
-        }}
-      >
-        <div style={{ fontSize: "30px", marginBottom: "12px" }}>🛡️</div>
-        <h1 style={{ margin: "0 0 8px", fontSize: "24px" }}>
-          Administrator Login
-        </h1>
-        <p style={{ margin: "0 0 28px", color: "var(--muted, #64748b)" }}>
-          Sign in to access the Intrusion Detection dashboard.
+    <main className="login-screen">
+      <div className="login-background" aria-hidden="true" />
+      <section className="login-intro" aria-label="Adaptive IDS">
+        <div className="login-brand">
+          <span className="login-brand-mark">IDS</span>
+          <span>Adaptive <strong>IDS</strong></span>
+        </div>
+        <p className="login-eyebrow">INTELLIGENT THREAT MONITORING</p>
+        <h1>Stay ahead of what’s happening on your network.</h1>
+        <p className="login-intro-copy">
+          One secure workspace for intrusion insights, model performance, and
+          adaptive detection.
         </p>
+        <div className="login-security-note">
+          <span aria-hidden="true" />
+          Private administrator access
+        </div>
+      </section>
 
-        <label htmlFor="admin-password" style={{
-          display: "block",
-          marginBottom: "8px",
-          fontWeight: 600,
-        }}>
-          Administrator password
-        </label>
-
-        <input
-          id="admin-password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-          autoFocus
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "13px",
-            border: "1px solid #cbd5e1",
-            borderRadius: "8px",
-            fontSize: "15px",
-            marginBottom: "16px",
-          }}
-        />
-
-        {error && (
-          <p role="alert" style={{ color: "#dc2626", fontSize: "14px" }}>
-            {error}
+      <section className="login-panel" aria-label="Administrator sign in">
+        <form className="login-card" onSubmit={handleSubmit}>
+          <div className="login-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M12 3 19 6v5c0 4.7-2.9 8-7 10-4.1-2-7-5.3-7-10V6l7-3Z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          </div>
+          <p className="login-card-eyebrow">ADMINISTRATOR ACCESS</p>
+          <h2>Welcome back</h2>
+          <p className="login-card-copy">
+            Sign in to open your intrusion detection dashboard.
           </p>
-        )}
 
-        <button
-          type="submit"
-          disabled={submitting || !password}
-          style={{
-            width: "100%",
-            padding: "13px",
-            border: 0,
-            borderRadius: "8px",
-            background: "#2563eb",
-            color: "white",
-            fontWeight: 600,
-            cursor: submitting ? "wait" : "pointer",
-            opacity: submitting || !password ? 0.65 : 1,
-          }}
-        >
-          {submitting ? "Signing in..." : "Sign in"}
-        </button>
-      </form>
+          <label htmlFor="admin-password">Administrator password</label>
+          <input
+            id="admin-password"
+            className="login-password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+            autoFocus
+          />
+
+          {error && (
+            <p className="login-error" role="alert">
+              {error}
+            </p>
+          )}
+
+          <button
+            className="login-submit"
+            type="submit"
+            disabled={submitting || !password}
+          >
+            {submitting ? "Signing in..." : "Sign in"}
+            <span aria-hidden="true">→</span>
+          </button>
+          <p className="login-card-footnote">
+            <span aria-hidden="true">🔒</span> Protected access for authorized
+            administrators
+          </p>
+        </form>
+      </section>
     </main>
   );
 }
