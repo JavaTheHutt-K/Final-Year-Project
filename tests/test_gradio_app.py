@@ -1,5 +1,4 @@
 import sys
-from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -15,63 +14,46 @@ def test_gradio_interface_and_fastapi_endpoints_share_the_app():
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
         assert client.get("/health").json() == {"status": "ok"}
-        assert client.get("/api/run/status").status_code == 200
+        assert client.get("/api/run/status").status_code == 503
 
 
 def test_gpu_check_is_registered_and_uses_cuda_availability(monkeypatch):
-    assert any(
-        function.fn is check_gpu_availability
-        for function in demo.fns.values()
-    )
+    assert any(function.fn is check_gpu_availability for function in demo.fns.values())
     monkeypatch.setitem(
         sys.modules,
         "torch",
         SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
     )
-
     assert check_gpu_availability() == {"cuda_available": False}
 
 
-def test_gradio_start_button_uses_existing_background_task(monkeypatch):
-    submissions = []
+def test_gradio_and_api_start_actions_share_orchestration(monkeypatch):
+    calls = []
 
-    def fake_submit(function, *args, **kwargs):
-        future = Future()
-        future.set_result(None)
-        submissions.append((function, args, kwargs))
-        return future
+    def fake_start():
+        calls.append("start")
+        return {"run_id": "run-123", "status": "queued"}
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    monkeypatch.setattr(backend_api, "_executor", executor)
-    monkeypatch.setattr(executor, "submit", fake_submit)
-    monkeypatch.setattr(backend_api, "_run_future", None)
-    monkeypatch.setattr(backend_api, "_run_status", {
-        "status": "idle",
-        "stage": "idle",
-        "message": "Ready to run the experiment.",
-    })
-    monkeypatch.setattr(backend_api, "_live_training_history", [])
-
-    registered_handler = next(
-        function.fn
-        for function in demo.fns.values()
-        if function.fn is start_experiment
+    monkeypatch.setattr(backend_api, "start_run_for_authorized_admin", fake_start)
+    monkeypatch.setattr(
+        backend_api,
+        "get_run_status",
+        lambda: {"run_id": "run-123", "status": "queued"},
     )
-    response, status = registered_handler()
+    monkeypatch.setenv("GRADIO_ADMIN_USERNAME", "admin")
+    registered_handler = next(function.fn for function in demo.fns.values() if function.fn is start_experiment)
+    response, status = registered_handler(SimpleNamespace(username="admin"))
 
-    assert response == {
-        "status": "running",
-        "message": "Experiment started in the background.",
-    }
-    assert status["status"] == "running"
-    assert submissions == [(backend_api._execute_experiment, (), {})]
+    assert response == {"run_id": "run-123", "status": "queued"}
+    assert status["status"] == "queued"
+    assert calls == ["start"]
 
-    with TestClient(app) as client:
-        api_response = client.post("/api/run")
 
-    assert api_response.status_code == 202
-    assert api_response.json() == response
-    assert submissions == [
-        (backend_api._execute_experiment, (), {}),
-        (backend_api._execute_experiment, (), {}),
-    ]
+def test_gradio_start_action_rejects_anonymous_user(monkeypatch):
+    registered_handler = next(function.fn for function in demo.fns.values() if function.fn is start_experiment)
+    try:
+        registered_handler(SimpleNamespace(username=None))
+    except Exception as error:
+        assert getattr(error, "status_code", None) == 401
+    else:
+        raise AssertionError("Anonymous Gradio launch should be rejected.")

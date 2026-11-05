@@ -4,13 +4,43 @@ from fastapi.testclient import TestClient
 from backend import api
 
 
-def test_dashboard_api_is_available_without_authentication():
+def test_read_only_api_and_health_are_public_but_status_requires_storage():
     with TestClient(api.app) as client:
         assert client.get("/health").json() == {"status": "ok"}
         assert client.get("/api/config").status_code == 200
         assert client.get("/api/results").status_code == 200
         assert client.get("/api/training-history").status_code == 200
-        assert client.get("/api/run/status").status_code == 200
+        assert client.get("/api/run/status").status_code == 503
+        assert client.put("/api/config", json={}).status_code == 401
+        assert client.post("/api/run").status_code == 401
+        assert client.post("/api/insights").status_code == 401
+
+
+def test_admin_login_issues_expiring_signed_token(monkeypatch):
+    import base64
+    import hashlib
+
+    salt = b"test-salt"
+    password = b"correct horse"
+    digest = hashlib.pbkdf2_hmac("sha256", password, salt, 200_000)
+    encode = lambda value: base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+    monkeypatch.setenv(
+        "ADMIN_PASSWORD_HASH",
+        f"pbkdf2_sha256$200000${encode(salt)}${encode(digest)}",
+    )
+    monkeypatch.setenv("ADMIN_TOKEN_SECRET", "test-token-secret-that-is-long-enough")
+
+    with TestClient(api.app) as client:
+        rejected = client.post("/api/auth/login", json={"password": "wrong"})
+        response = client.post("/api/auth/login", json={"password": "correct horse"})
+        protected = client.post(
+            "/api/run",
+            headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+        )
+
+    assert rejected.status_code == 401
+    assert response.status_code == 200
+    assert protected.status_code == 503
 
 
 def test_cors_origins_can_be_configured_for_hosted_frontend(monkeypatch):

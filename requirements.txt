@@ -10,3 +10,6 @@ PyYAML
 joblib
 flwr[simulation]==1.13.1
 ray==2.10.0
+google-auth
+google-cloud-storage
+google-genai

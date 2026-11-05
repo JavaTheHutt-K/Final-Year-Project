@@ -37,7 +37,6 @@ def editable_config(tmp_path, monkeypatch):
     }
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     monkeypatch.setattr(api, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(api, "_run_future", None)
     return config_path, config
 
 

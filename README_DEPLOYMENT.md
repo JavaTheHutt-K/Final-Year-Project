@@ -19,15 +19,16 @@ port. The Vite frontend remains a separate Vercel deployment.
   | GET | `/api/results` | Read results |
   | GET | `/api/training-history` | Read round history |
   | GET | `/api/metrics?model=...&test_set=...` | Read model metrics |
-  | POST | `/api/ai/compare` | Request an optional post-run AI interpretation |
-  | POST | `/api/run` | Queue an experiment in the API process |
-  | GET | `/api/run/status` | Read in-process run status |
+  | POST | `/api/auth/login` | Exchange the administrator password for a short-lived bearer token |
+  | POST | `/api/ai/compare` | Request a post-run Gemini interpretation (admin only) |
+  | POST | `/api/insights` | Generate insights from the latest completed run (admin only) |
+  | POST | `/api/run` | Queue an experiment in the configured Cloud Run Job (admin only) |
+  | GET | `/api/run/status` | Read persisted run status |
 
-- `POST /api/run` does not load data at API startup. Dataset preparation
-  begins only after a run is requested and reads the CSV in chunks. It then
-  retains the configured sample in memory for splitting, preprocessing, and
-  training. The default sample fraction is `0.1`; this is not fully streaming
-  training.
+- `POST /api/run` saves the active configuration and queued run in Supabase,
+  then launches the configured Cloud Run Job. Training does not run in the API
+  service process. The Job downloads the configured GCS object and executes the
+  existing Flower/Ray experiment.
 - The app uses Flower 1.13.1 with Ray 2.10.0. Ray starts a local simulation
   with one CPU per simulated client (three by default). This is CPU- and
   memory-intensive; allocate enough Cloud Run CPU for the clients plus the API
@@ -73,25 +74,21 @@ service and `http://localhost:8080/` for the Gradio dashboard.
 5. Keep one Uvicorn worker. Run status, active training history, and
    configuration edits are held in process memory or local files and are not
    shared across Cloud Run instances.
-6. To enable the optional results-page AI interpretation, set `AI_API_KEY` as
-   a backend secret. Optionally set `AI_MODEL` and `AI_BASE_URL` for the
-   OpenAI-compatible chat completions provider. Do not set these as `VITE_*`
-   variables. The user-triggered endpoint sends summary metrics only and rejects
-   requests while an experiment is running.
-
-For an existing deployment, add the provider key to Google Cloud Secret Manager,
-then update the Cloud Run service to expose that secret as the `AI_API_KEY`
-environment variable. The Cloud Run service account needs permission to access
-the secret. Alternatively, configure it through the Cloud Run service's
-Variables & secrets settings. Never put the provider key in Vercel environment
-variables or frontend code.
-
-Deploy the updated frontend to Vercel so the results page shows the AI comparison
-button, and deploy the updated backend to Cloud Run so it serves
-`POST /api/ai/compare`. Keep the existing `VITE_API_BASE_URL` pointed at the
-Cloud Run service URL. No AI key or new Vercel variable is needed; without
-`AI_API_KEY` on Cloud Run, the rest of the dashboard and experiment continue to
-work normally.
+6. Configure `SUPABASE_URL` and `SUPABASE_KEY` on both the API service and Job.
+   The key is a backend secret and must never be exposed to Vercel.
+7. Configure `CLOUD_RUN_PROJECT`, `CLOUD_RUN_REGION`, and `CLOUD_RUN_JOB` on
+   the API service. Its service account needs permission to run that Job.
+   Configure `IDS_GCS_BUCKET` on the Job and grant its service account object
+   read access. The object name comes from `dataset.gcs_object` (or
+   `dataset.source_file` when omitted).
+8. Configure `GEMINI_API_KEY` and, optionally, `GEMINI_MODEL` on the API
+   service. The default model is `gemini-2.5-flash`, called through the
+   `google-genai` SDK. Never use `VITE_*` variables for this key.
+9. Create a PBKDF2-SHA256 password hash for `ADMIN_PASSWORD_HASH`, set a random
+   `ADMIN_TOKEN_SECRET` of at least 32 bytes, and set `GRADIO_ADMIN_USERNAME`.
+   The API login endpoint returns a one-hour signed bearer token. The Gradio
+   start action requires its configured administrator login. Read-only API
+   endpoints and `/health` remain public.
 
 For example, the following shows the relevant Cloud Run deployment options;
 replace the project, region, bucket, and image values with your own:
@@ -119,13 +116,13 @@ needs capacity beyond those client CPUs for Ray, preprocessing, and the API.
 
 ## Training reliability and persistence
 
-The existing API starts Flower/Ray in a background thread and returns HTTP
-202. Cloud Run manages request-serving instances, not durable background
-workers: the service can be scaled down or restarted while a run is active.
-The run status and progress are in memory, and local result/config files are
-ephemeral and instance-local. `IDS_RESULTS_DIR` defaults to `/tmp/ids-results`
-in the container, and Ray's temporary data defaults to `/tmp/ray`. These
-locations are not durable storage.
+Supabase is the authoritative run/config/results store. Worker output files are
+temporary; completed results and training history are persisted to the
+`experiment_runs` table. The API checks Supabase before accepting another run,
+and does not report a run as started if Cloud Run Job launch fails. Use a single
+Cloud Run API instance to reduce start races; for strict multi-instance
+concurrency guarantees, enforce a unique active-run constraint or an atomic
+database lock in Supabase.
 
 The current in-service training route is retained for compatibility, but
 should be treated as best-effort only. For reliable production training, move
@@ -137,11 +134,12 @@ Flower/Ray training behavior.
 
 ## Security
 
-The API currently has **no authentication**. CORS is a browser-origin policy,
-not access control: non-browser clients can still call `/api/config` and
-`/api/run`. In particular, changing settings and starting CPU/memory-intensive
-training are publicly available if the Cloud Run service allows unauthenticated
-invocation.
+Administrative settings, experiment start, and Gemini endpoints require a
+valid short-lived signed administrator bearer token. Password verification uses
+a PBKDF2-SHA256 hash; tokens are HMAC-signed and expire after one hour. Gradio's
+administrative launch action is gated by its authenticated username and the
+same password hash. Configure the service with `--no-allow-unauthenticated`
+when possible. Public read-only API routes do not reveal service credentials.
 
 The example deployment uses `--no-allow-unauthenticated`. That protects the
 service, but a browser on Vercel cannot directly call a private Cloud Run
@@ -152,18 +150,16 @@ added or an equivalent trusted access-control layer is in place. Do not put a
 service credential or admin token in a `VITE_*` variable; Vite embeds those
 values in publicly served frontend assets.
 
-Incoming settings are validated by the existing API. Unexpected training and
-file errors are logged server-side and the status response avoids returning
-exception details. The interactive docs/OpenAPI routes remain disabled.
+Incoming settings are validated by the API. Cloud Run launch errors and
+worker failures are persisted to the run record. The interactive docs/OpenAPI
+routes remain disabled.
 
 ## Supabase environment
 
-`DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_KEY` are reserved environment
-variables for a future integration and are intentionally not set in the
-image. The application does not currently connect to Supabase or any database;
-settings, status, and results continue to use their existing YAML, in-memory,
-and file-backed behavior. No database or credentials are created by this
-deployment setup.
+The application expects the existing `app_settings` and `experiment_runs`
+tables with the documented columns. Store `SUPABASE_URL` and `SUPABASE_KEY` as
+secrets in both API and Job environments. No live database or cloud resources
+are created or modified by this repository.
 
 Use Secret Manager for credentials when database integration is added. Do not
 commit a real `.env` file. `.env.example` contains placeholders only, and the

@@ -6,23 +6,27 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from concurrent.futures import Future, ThreadPoolExecutor
-from math import isclose
+from datetime import datetime, timezone
+from math import isclose, isfinite
 from pathlib import Path
 from threading import Lock
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request as URLRequest
-from urllib.request import urlopen
+from uuid import uuid4
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from backend import database
+from backend.auth import (
+    issue_admin_token,
+    require_admin,
+    verify_admin_password,
+)
+from backend.cloudrun import launch_training_job
 from backend.data_prep import _resolve_output_path
-from backend.run_experiment import run_experiment
 from backend.settings import DatabaseSettings
 
 
@@ -44,17 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 CONFIG_PATH = Path(_optional_env("IDS_CONFIG_PATH") or PROJECT_ROOT / "config.yaml")
-_executor: ThreadPoolExecutor | None = None
 _state_lock = Lock()
-
-
-_run_status: dict[str, Any] = {
-    "status": "idle",
-    "stage": "idle",
-    "message": "Ready to run the experiment.",
-}
-_live_training_history: list[dict[str, Any]] = []
-_run_future: Future[dict[str, Any]] | None = None
 _ai_comparison_active = False
 
 
@@ -62,33 +56,16 @@ class AIComparisonRequest(BaseModel):
     test_set: str = Field(min_length=1, max_length=120)
 
 
+class AdminLoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Create the run worker with the ASGI app and release it on shutdown."""
-    global _executor
-    with _state_lock:
-        if _executor is None:
-            _executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="intrusion-experiment",
-            )
+    """Run API lifecycle without starting any local training workers."""
     logger.info("Adaptive Intrusion Detection API started")
-    try:
-        yield
-    finally:
-        with _state_lock:
-            executor = _executor
-            _executor = None
-            active_run = _run_future is not None and not _run_future.done()
-            if active_run and _run_future is not None:
-                _run_future.cancel()
-        if active_run:
-            logger.warning(
-                "An experiment was active during shutdown and may be interrupted"
-            )
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        logger.info("Adaptive Intrusion Detection API stopped")
+    yield
+    logger.info("Adaptive Intrusion Detection API stopped")
 
 
 app = FastAPI(
@@ -143,7 +120,7 @@ app.add_middleware(
     allow_origins=_cors_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -190,63 +167,91 @@ def _report_path() -> Path:
     return _resolve_output_path(PROJECT_ROOT, _api_config["paths"]["data_report"])
 
 
-def _run_progress(stage: str, detail: dict[str, Any]) -> None:
-    """Update observable run progress from the experiment worker."""
-    with _state_lock:
-        if "round" in detail and "model" in detail:
-            _live_training_history.append(dict(detail))
-        _run_status.update(
-            {
-                "status": "running",
-                "stage": stage,
-                "message": stage.replace("_", " ").capitalize(),
-                **detail,
-            }
-        )
+def _database_is_configured() -> bool:
+    return bool(
+        os.environ.get("SUPABASE_URL", "").strip()
+        and os.environ.get("SUPABASE_KEY", "").strip()
+    )
 
 
-def _execute_experiment() -> dict[str, Any]:
-    """Run the long experiment on a worker and preserve explicit failures."""
-    global _run_future
+def _db_call(function, *args, **kwargs):
     try:
-        results = run_experiment(CONFIG_PATH, progress_callback=_run_progress)
-        with _state_lock:
-            _run_status.update(
-                {
-                    "status": "completed",
-                    "stage": "completed",
-                    "message": "Experiment completed successfully.",
-                    "error": None,
-                }
-            )
-        return results
-    except Exception as error:
-        logger.exception("Experiment run failed")
-        with _state_lock:
-            _run_status.update(
-                {
-                    "status": "failed",
-                    "stage": "failed",
-                    "message": "Experiment failed.",
-                    "error": "Experiment failed. Check service logs for details.",
-                }
-            )
-        raise
-    finally:
-        with _state_lock:
-            _run_future = None
+        return function(*args, **kwargs)
+    except database.DatabaseError as error:
+        logger.error("Supabase operation failed: %s", error)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Experiment storage is unavailable: {error}",
+        ) from error
+
+
+def _decode_config(value: Any) -> dict[str, Any]:
+    config = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=500, detail="Saved experiment configuration is invalid.")
+    return config
+
+
+def _configured_config() -> dict[str, Any]:
+    if _database_is_configured():
+        saved = _db_call(database.get_setting, "experiment_config")
+        if saved is not None:
+            return _decode_config(saved)
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file)
+    except (OSError, yaml.YAMLError) as error:
+        logger.exception("Could not read experiment configuration")
+        raise HTTPException(status_code=500, detail="Could not read experiment configuration.") from error
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=500, detail="Experiment configuration is invalid.")
+    return config
+
+
+def _validate_run_config(config: dict[str, Any]) -> None:
+    dataset = config.get("dataset")
+    training = config.get("training")
+    split = config.get("split")
+    if not isinstance(dataset, dict) or not isinstance(training, dict) or not isinstance(split, dict):
+        raise HTTPException(status_code=422, detail="Experiment configuration is incomplete.")
+    source_file = dataset.get("source_file")
+    fraction = dataset.get("sample_fraction")
+    if not isinstance(source_file, str) or not source_file.strip():
+        raise HTTPException(status_code=422, detail="Dataset source_file is required.")
+    if (
+        isinstance(fraction, bool)
+        or not isinstance(fraction, (int, float))
+        or not isfinite(fraction)
+        or not 0 < fraction <= 1
+    ):
+        raise HTTPException(status_code=422, detail="Dataset sample_fraction must be between 0 and 1.")
+    for field in ("clients", "initial_rounds", "update_rounds", "local_epochs", "random_seed"):
+        value = training.get(field)
+        if type(value) is not int or value < 0 or (field != "random_seed" and value == 0):
+            raise HTTPException(status_code=422, detail=f"Training {field} is invalid.")
+    fractions = (
+        split.get("initial_train_fraction"),
+        split.get("update_fraction"),
+        split.get("test_fraction"),
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not isfinite(value) or not 0 < value < 1
+        for value in fractions
+    ) or not isclose(sum(fractions), 1.0, abs_tol=0.001):
+        raise HTTPException(status_code=422, detail="Data split fractions must be valid and sum to 1.")
 
 
 @app.get("/api/config")
 def get_config() -> dict[str, Any]:
-    """Return the active root YAML configuration."""
-    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
-        return yaml.safe_load(config_file)
+    """Return the saved experiment configuration or the initial YAML default."""
+    return _configured_config()
 
 
 @app.put("/api/config")
 def update_config(
     payload: dict[str, Any],
+    _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     """Validate and save settings that can be changed through the dashboard."""
     editable_fields = {
@@ -343,37 +348,60 @@ def update_config(
     training["partition"] = partition_name
 
     with _state_lock:
-        if _run_future is not None and not _run_future.done():
-            raise HTTPException(
-                status_code=409,
-                detail="Settings cannot be changed while an experiment is running",
-            )
+        if _database_is_configured():
+            active_run = _db_call(database.get_latest_active_run)
+            if active_run:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Settings cannot be changed while an experiment is active.",
+                )
+        config = _configured_config()
+        for section, values in payload.items():
+            config[section].update(values)
+        if _database_is_configured():
+            _db_call(database.save_setting, "experiment_config", json.dumps(config))
         try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
-                config = yaml.safe_load(config_file)
-            for section, values in payload.items():
-                config[section].update(values)
             temporary_path = CONFIG_PATH.with_suffix(".yaml.tmp")
             with temporary_path.open("w", encoding="utf-8", newline="\n") as config_file:
                 yaml.safe_dump(config, config_file, sort_keys=False, allow_unicode=True)
             temporary_path.replace(CONFIG_PATH)
         except (OSError, yaml.YAMLError) as error:
             logger.exception("Could not save dashboard settings")
-            raise HTTPException(
-                status_code=500,
-                detail="Could not save settings.",
-            ) from error
+            raise HTTPException(status_code=500, detail="Could not save settings.") from error
     return config
 
 
 @app.get("/api/results")
 def get_results() -> dict[str, Any]:
-    """Return the latest result payload or a typed empty initial response."""
+    """Return results from the latest successful run, never a failed run."""
+    if _database_is_configured():
+        run = _db_call(database.get_latest_completed_run)
+        if run is not None:
+            results = run.get("results")
+            if isinstance(results, str):
+                try:
+                    results = json.loads(results)
+                except json.JSONDecodeError as error:
+                    raise HTTPException(
+                        status_code=500, detail="Saved experiment results are invalid."
+                    ) from error
+            if isinstance(results, dict):
+                return results
+            raise HTTPException(
+                status_code=500,
+                detail="The latest completed experiment has no valid saved results.",
+            )
+        return _empty_results()
+
     results = _load_json(_results_path())
     if results is not None:
         return results
+    return _empty_results()
+
+
+def _empty_results() -> dict[str, Any]:
     response: dict[str, Any] = {
-        "config": _api_config,
+        "config": _configured_config(),
         "training_history": [],
         "metrics": {
             "federated": {},
@@ -391,9 +419,22 @@ def get_results() -> dict[str, Any]:
 @app.get("/api/training-history")
 def get_training_history() -> list[dict[str, Any]]:
     """Return per-round federated training and evaluation history."""
-    with _state_lock:
-        if _run_status["status"] == "running":
-            return [dict(entry) for entry in _live_training_history]
+    if _database_is_configured():
+        active = _db_call(database.get_latest_active_run)
+        run = active or _db_call(database.get_latest_completed_run)
+        if run is None:
+            return []
+        history = run.get("training_history")
+        if isinstance(history, str):
+            try:
+                history = json.loads(history)
+            except json.JSONDecodeError as error:
+                raise HTTPException(status_code=500, detail="Saved training history is invalid.") from error
+        if history is None and isinstance(run.get("results"), dict):
+            history = run["results"].get("training_history", [])
+        if not isinstance(history, list):
+            raise HTTPException(status_code=500, detail="Saved training history is invalid.")
+        return history
     results = _load_json(_results_path())
     if results is None:
         return []
@@ -419,8 +460,8 @@ def get_metrics(
         "centralised_updated",
     }:
         raise HTTPException(status_code=422, detail="Unknown model identifier")
-    results = _load_json(_results_path())
-    if results is None:
+    results = get_results()
+    if not results.get("metrics"):
         raise HTTPException(status_code=404, detail="No experiment results are available")
     metrics = results.get("metrics", {}).get(model, {}).get(test_set)
     if metrics is None:
@@ -432,11 +473,14 @@ def get_metrics(
 
 
 @app.post("/api/ai/compare")
-def compare_with_ai(payload: AIComparisonRequest) -> dict[str, str]:
+def compare_with_ai(
+    payload: AIComparisonRequest,
+    _: None = Depends(require_admin),
+) -> dict[str, str]:
     """Request a post-run AI interpretation of saved metrics only."""
     global _ai_comparison_active
     with _state_lock:
-        if _run_status["status"] == "running":
+        if _database_is_configured() and _db_call(database.get_latest_active_run):
             raise HTTPException(
                 status_code=409,
                 detail="AI comparison is unavailable while an experiment is running.",
@@ -455,39 +499,27 @@ def compare_with_ai(payload: AIComparisonRequest) -> dict[str, str]:
 
 
 def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
-    api_key = os.environ.get("AI_API_KEY", "").strip()
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="AI comparison is not configured. Set AI_API_KEY on the backend.",
+            detail="Gemini is not configured. Set GEMINI_API_KEY on the backend.",
         )
-    provider_url = _optional_env(
-        "AI_BASE_URL",
-        "https://api.openai.com/v1/chat/completions",
-    )
-    provider_url = provider_url.strip()
-    parsed_provider_url = urlsplit(provider_url)
-    if parsed_provider_url.scheme not in {"http", "https"} or not parsed_provider_url.netloc:
-        raise HTTPException(
-            status_code=500,
-            detail="AI_BASE_URL must be an absolute HTTP(S) chat completions URL.",
-        )
+    results = get_results()
+    if not results.get("metrics"):
+        raise HTTPException(status_code=404, detail="No completed experiment results are available.")
 
-    results = _load_json(_results_path())
-    if results is None:
-        raise HTTPException(status_code=404, detail="No experiment results are available")
-
-    model_names = {
+    labels = {
         "centralised": "Centralised",
         "federated": "Federated",
         "centralised_updated": "Centralised (updated)",
         "federated_updated": "Federated (updated)",
     }
-    metrics_by_model = results.get("metrics", {})
     comparison: dict[str, Any] = {}
-    for model, label in model_names.items():
+    metrics_by_model = results.get("metrics", {})
+    for model, label in labels.items():
         metrics = metrics_by_model.get(model, {}).get(payload.test_set)
-        if metrics is not None:
+        if isinstance(metrics, dict):
             comparison[label] = {
                 name: metrics[name]
                 for name in (
@@ -499,121 +531,186 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
                 )
                 if name in metrics
             }
-
     if not {"Centralised", "Federated"}.issubset(comparison):
         raise HTTPException(
             status_code=404,
             detail="Both centralised and federated metrics are required for this test set.",
         )
 
-    prompt = {
-        "test_set": payload.test_set,
-        "metrics": comparison,
-    }
-    request_body = json.dumps(
-        {
-            "model": _optional_env("AI_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Interpret the supplied intrusion-detection evaluation "
-                        "metrics. Compare centralised and federated approaches, "
-                        "including updated variants if present. Explain tradeoffs "
-                        "using only the supplied metrics, pay particular attention "
-                        "to recall and false negatives, and do not claim statistical "
-                        "significance or infer causes. State that these are measured "
-                        "results and your text is an interpretation. Be concise."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(prompt)},
-            ],
-            "temperature": 0.2,
-        }
-    ).encode("utf-8")
-    request = URLRequest(
-        provider_url,
-        data=request_body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    model = _optional_env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
+    prompt = (
+        "Interpret the supplied intrusion-detection evaluation metrics. Compare "
+        "centralised and federated approaches, including updated variants if "
+        "present. Explain tradeoffs using only the supplied metrics, pay particular "
+        "attention to recall and false negatives, and do not claim statistical "
+        "significance or infer causes. State that these are measured results and "
+        "your text is an interpretation. Be concise.\n\n"
+        + json.dumps({"test_set": payload.test_set, "metrics": comparison})
     )
     try:
-        with urlopen(request, timeout=30) as response:
-            response_data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        logger.warning("AI comparison provider returned HTTP %s", error.code)
-        raise HTTPException(
-            status_code=502,
-            detail="The AI comparison provider rejected the request.",
-        ) from error
-    except (
-        URLError,
-        TimeoutError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-    ) as error:
-        logger.warning("Could not complete AI comparison request: %s", error)
-        raise HTTPException(
-            status_code=502,
-            detail="Could not get an AI comparison. Please try again later.",
-        ) from error
+        from google import genai
 
-    try:
-        analysis = response_data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as error:
-        logger.warning("AI comparison provider returned an invalid response")
-        raise HTTPException(
-            status_code=502,
-            detail="The AI comparison provider returned an invalid response.",
-        ) from error
-    if not isinstance(analysis, str) or not analysis.strip():
-        raise HTTPException(
-            status_code=502,
-            detail="The AI comparison provider returned an empty analysis.",
+        response = genai.Client(api_key=api_key).models.generate_content(
+            model=model,
+            contents=prompt,
         )
+    except ImportError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini support is unavailable; install the google-genai dependency.",
+        ) from error
+    except Exception as error:
+        logger.exception("Gemini comparison request failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Gemini could not complete the comparison. Check the backend model configuration.",
+        ) from error
+    analysis = response.text
+    if not isinstance(analysis, str) or not analysis.strip():
+        raise HTTPException(status_code=502, detail="Gemini returned an empty analysis.")
     return {"test_set": payload.test_set, "analysis": analysis.strip()}
 
 
+@app.post("/api/insights")
+def generate_insights(_: None = Depends(require_admin)) -> dict[str, str]:
+    """Generate an interpretation of the latest successful experiment metrics."""
+    global _ai_comparison_active
+    with _state_lock:
+        if _database_is_configured() and _db_call(database.get_latest_active_run):
+            raise HTTPException(status_code=409, detail="Gemini analysis is unavailable while an experiment is running.")
+        if _ai_comparison_active:
+            raise HTTPException(status_code=409, detail="Another Gemini analysis is already in progress.")
+        _ai_comparison_active = True
+    try:
+        results = get_results()
+        test_set = next(iter(results.get("metrics", {}).get("federated", {})), None)
+        if not test_set:
+            raise HTTPException(status_code=404, detail="No completed federated metrics are available.")
+        comparison = _request_ai_comparison(AIComparisonRequest(test_set=test_set))
+        latest = _db_call(database.get_latest_completed_run) if _database_is_configured() else None
+        return {
+            "run_id": str(latest["id"]) if latest else "local-results",
+            "model": _optional_env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash",
+            "insights": comparison["analysis"],
+        }
+    finally:
+        with _state_lock:
+            _ai_comparison_active = False
+
+
 @app.post("/api/run", status_code=202)
-def start_run() -> dict[str, str]:
-    """Start an experiment in the background without blocking the API."""
-    global _executor, _run_future, _live_training_history
+def start_run(_: None = Depends(require_admin)) -> dict[str, Any]:
+    """Create a Supabase run and launch its dedicated Cloud Run Job."""
+    return start_run_for_authorized_admin()
+
+
+def start_run_for_authorized_admin() -> dict[str, Any]:
+    """Shared orchestration for the authenticated API and Gradio admin action."""
     with _state_lock:
         if _ai_comparison_active:
             raise HTTPException(
                 status_code=409,
                 detail="An experiment cannot start during an AI comparison.",
             )
-        if _run_future is not None and not _run_future.done():
-            raise HTTPException(status_code=409, detail="An experiment is already running")
-        for key in ("model", "round", "clients"):
-            _run_status.pop(key, None)
-        _run_status.update(
-            {
-                "status": "running",
-                "stage": "starting",
-                "message": "Experiment queued.",
-                "error": None,
-            }
-        )
-        _live_training_history = []
-        if _executor is None:
-            _executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="intrusion-experiment",
+        if not _database_is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="Experiment storage is not configured; set SUPABASE_URL and SUPABASE_KEY.",
             )
-        _run_future = _executor.submit(_execute_experiment)
-    return {"status": "running", "message": "Experiment started in the background."}
+        if _db_call(database.get_latest_active_run):
+            raise HTTPException(status_code=409, detail="An experiment is already queued or running.")
+        config = _configured_config()
+        _validate_run_config(config)
+        run_id = str(uuid4())
+        _db_call(database.save_setting, "experiment_config", json.dumps(config))
+        _db_call(
+            database.create_experiment_run,
+            {
+                "id": run_id,
+                "status": "queued",
+                "stage": "queued",
+                "message": "Cloud Run Job is being launched.",
+                "error": None,
+                "training_history": [],
+                "results": None,
+            },
+        )
+        try:
+            execution = launch_training_job(run_id)
+        except Exception as error:
+            logger.exception("Could not launch Cloud Run Job for run %s", run_id)
+            try:
+                _db_call(
+                    database.update_experiment_run,
+                    run_id,
+                    {
+                        "status": "failed",
+                        "stage": "failed",
+                        "message": "Cloud Run Job launch failed.",
+                        "error": str(error)[:1000],
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except HTTPException:
+                logger.exception("Could not mark run %s failed after launch failure", run_id)
+            raise HTTPException(
+                status_code=502,
+                detail="The experiment run was created but the Cloud Run Job could not be launched.",
+            ) from error
+        _db_call(
+            database.update_experiment_run,
+            run_id,
+            {
+                "cloud_run_execution": execution,
+                "message": "Cloud Run Job execution launched.",
+            },
+        )
+    return {
+        "id": run_id,
+        "run_id": run_id,
+        "status": "queued",
+        "message": "Cloud Run Job execution launched.",
+    }
 
 
 @app.get("/api/run/status")
 def get_run_status() -> dict[str, Any]:
-    """Return current run state, stage, and any explicit error."""
-    with _state_lock:
-        return dict(_run_status)
+    """Return the latest authoritative run state from Supabase."""
+    if not _database_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Experiment storage is not configured; run status is unavailable.",
+        )
+    run = _db_call(database.get_latest_active_run) or _db_call(database.get_latest_run)
+    if run is None:
+        return {
+            "status": "idle",
+            "stage": "idle",
+            "message": "Ready to run the experiment.",
+            "run_id": None,
+        }
+    return {
+        "run_id": str(run.get("id", "")),
+        "status": run.get("status", "unavailable"),
+        "stage": run.get("stage"),
+        "message": run.get("message"),
+        "error": run.get("error"),
+        "cloud_run_execution": run.get("cloud_run_execution"),
+    }
+
+
+@app.post("/api/auth/login")
+def admin_login(payload: AdminLoginRequest) -> dict[str, Any]:
+    """Authenticate an administrator using the backend password hash."""
+    if not os.environ.get("ADMIN_PASSWORD_HASH", "").strip():
+        raise HTTPException(status_code=503, detail="Administrator login is not configured.")
+    if not verify_admin_password(payload.password):
+        raise HTTPException(status_code=401, detail="Invalid administrator password.")
+    return {
+        "access_token": issue_admin_token(),
+        "token_type": "bearer",
+        "expires_in": 3600,
+    }
 
 
 if __name__ == "__main__":

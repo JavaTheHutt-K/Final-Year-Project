@@ -6,6 +6,7 @@ import gradio as gr
 import uvicorn
 
 from backend import api as backend_api
+from backend.auth import verify_gradio_admin, verify_gradio_credentials
 
 
 def _optional_env(name: str, default: str | None = None) -> str | None:
@@ -32,8 +33,9 @@ def refresh_backend_state():
     )
 
 
-def start_experiment():
-    response = backend_api.start_run()
+def start_experiment(request: gr.Request):
+    verify_gradio_admin(request.username)
+    response = backend_api.start_run_for_authorized_admin()
     return response, backend_api.get_run_status()
 
 
@@ -92,6 +94,12 @@ app = gr.mount_gradio_app(
     demo,
     path="/",
     ssr_mode=False,
+    auth=(
+        verify_gradio_credentials
+        if _optional_env("GRADIO_ADMIN_USERNAME")
+        and _optional_env("ADMIN_PASSWORD_HASH")
+        else None
+    ),
 )
 
 

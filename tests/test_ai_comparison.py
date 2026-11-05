@@ -1,9 +1,9 @@
-import json
-from io import BytesIO
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from backend import api
+from backend.auth import issue_admin_token
 
 
 def saved_results():
@@ -31,65 +31,63 @@ def saved_results():
     }
 
 
-def test_ai_comparison_uses_saved_metrics_only(monkeypatch):
-    monkeypatch.setenv("AI_API_KEY", "test-key")
-    monkeypatch.setattr(api, "_load_json", lambda _: saved_results())
-    monkeypatch.setitem(api._run_status, "status", "completed")
+def test_gemini_comparison_uses_saved_completed_metrics(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "backend-test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(api, "get_results", saved_results)
     captured = {}
 
-    def fake_urlopen(request, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
-        return BytesIO(
-            json.dumps(
-                {"choices": [{"message": {"content": "Federated recall is higher."}}]}
-            ).encode("utf-8")
-        )
+    def generate_content(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(text="Federated recall is higher.")
 
-    monkeypatch.setattr(api, "urlopen", fake_urlopen)
-    with TestClient(api.app) as client:
-        response = client.post(
-            "/api/ai/compare",
-            json={"test_set": "Random holdout"},
+    gemini = SimpleNamespace(
+        Client=lambda **kwargs: SimpleNamespace(
+            models=SimpleNamespace(generate_content=generate_content)
         )
+    )
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(genai=gemini))
 
-    assert response.status_code == 200
-    assert response.json() == {
+    result = api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    assert result == {
         "test_set": "Random holdout",
         "analysis": "Federated recall is higher.",
     }
-    assert captured["timeout"] == 30
-    request_payload = json.loads(captured["request"].data)
-    assert "traffic" not in json.dumps(request_payload).lower()
-    assert request_payload["messages"][1]["content"].find("Random holdout") >= 0
-    assert captured["request"].get_header("Authorization") == "Bearer test-key"
+    assert captured["model"] == "gemini-2.5-flash"
+    assert "Random holdout" in captured["contents"]
+    assert "traffic" not in captured["contents"].lower()
+
+
+def test_ai_comparison_is_rejected_without_admin_authorization():
+    with TestClient(api.app) as client:
+        response = client.post("/api/ai/compare", json={"test_set": "Random holdout"})
+    assert response.status_code == 401
 
 
 def test_ai_comparison_is_not_available_during_training(monkeypatch):
-    monkeypatch.setenv("AI_API_KEY", "test-key")
-    monkeypatch.setitem(api._run_status, "status", "running")
+    monkeypatch.setenv("ADMIN_TOKEN_SECRET", "test-token-secret-that-is-long-enough")
+    monkeypatch.setenv("GEMINI_API_KEY", "backend-test-key")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "backend-key")
+    monkeypatch.setattr(api.database, "get_latest_active_run", lambda: {"id": "run-active"})
+    token = issue_admin_token()
 
     def unexpected_request(*_args, **_kwargs):
-        raise AssertionError("AI provider should not be called during training")
+        raise AssertionError("Gemini must not run while training is active")
 
-    monkeypatch.setattr(api, "urlopen", unexpected_request)
+    monkeypatch.setattr(api, "_request_ai_comparison", unexpected_request)
     with TestClient(api.app) as client:
         response = client.post(
             "/api/ai/compare",
             json={"test_set": "Random holdout"},
+            headers={"Authorization": f"Bearer {token}"},
         )
-
     assert response.status_code == 409
 
 
-def test_ai_comparison_requires_backend_api_key(monkeypatch):
-    monkeypatch.delenv("AI_API_KEY", raising=False)
-    monkeypatch.setitem(api._run_status, "status", "completed")
-    with TestClient(api.app) as client:
-        response = client.post(
-            "/api/ai/compare",
-            json={"test_set": "Random holdout"},
-        )
-
-    assert response.status_code == 503
-    assert "AI_API_KEY" in response.json()["detail"]
+def test_ai_comparison_requires_backend_gemini_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with __import__("pytest").raises(Exception) as error:
+        api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+    assert getattr(error.value, "status_code", None) == 503
