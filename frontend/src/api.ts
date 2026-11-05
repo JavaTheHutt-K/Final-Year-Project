@@ -177,6 +177,10 @@ export interface AiInsightsResponse {
 }
 
 export async function generateAiInsights(): Promise<AiInsightsResponse> {
-  const { data } = await api.post<AiInsightsResponse>("/api/insights");
+  const { data } = await api.post<AiInsightsResponse>(
+    "/api/insights",
+    undefined,
+    { timeout: 45_000 },
+  );
   return data;
 }
