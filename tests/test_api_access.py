@@ -70,6 +70,26 @@ def test_cors_rejects_wildcard_and_non_origin_values(monkeypatch):
         api._cors_origins()
 
 
+def test_managed_deployment_requires_supabase(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "ids-api")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+
+    with pytest.raises(Exception) as error:
+        api.get_config()
+
+    assert getattr(error.value, "status_code", None) == 503
+
+
+def test_managed_deployment_requires_explicit_cors_origin(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "ids-api")
+    monkeypatch.delenv("FRONTEND_URL", raising=False)
+    monkeypatch.delenv("IDS_CORS_ORIGINS", raising=False)
+
+    with pytest.raises(ValueError, match="FRONTEND_URL"):
+        api._cors_origins()
+
+
 def test_results_use_configured_temporary_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("IDS_RESULTS_DIR", str(tmp_path))
 

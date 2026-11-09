@@ -78,6 +78,8 @@ service and `http://localhost:8080/` for the Gradio dashboard.
    local YAML/JSON files are only development and worker scratch copies.
 6. Configure `SUPABASE_URL` and `SUPABASE_KEY` on both the API service and Job.
    The key is a backend secret and must never be exposed to Vercel.
+   Managed deployments automatically require Supabase; `IDS_REQUIRE_DATABASE`
+   can also be set to `true` outside Cloud Run to prevent local storage fallback.
 7. Configure `CLOUD_RUN_PROJECT`, `CLOUD_RUN_REGION`, and `CLOUD_RUN_JOB` on
    the API service. Its service account needs permission to run that Job.
    Configure `IDS_GCS_BUCKET` on the Job and grant its service account object

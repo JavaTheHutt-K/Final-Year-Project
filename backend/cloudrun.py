@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import os
 from urllib.parse import quote
+from uuid import UUID
 
 
 def launch_training_job(run_id: str) -> dict[str, str]:
     """Start a Cloud Run Job execution and return its operation identifier."""
+    try:
+        UUID(run_id)
+    except (ValueError, AttributeError, TypeError) as error:
+        raise ValueError("run_id must be a valid UUID.") from error
     project = os.environ.get("CLOUD_RUN_PROJECT", "").strip()
     region = os.environ.get("CLOUD_RUN_REGION", "").strip()
     job = os.environ.get("CLOUD_RUN_JOB", "").strip()

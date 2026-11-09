@@ -95,6 +95,10 @@ def _cors_origins() -> list[str]:
             if origin.strip()
         ]
     else:
+        if os.environ.get("K_SERVICE", "").strip():
+            raise ValueError(
+                "FRONTEND_URL or IDS_CORS_ORIGINS is required on Cloud Run deployments"
+            )
         origins = _api_config["api"]["cors_origins"]
 
     for origin in origins:
@@ -174,6 +178,22 @@ def _database_is_configured() -> bool:
     )
 
 
+def _database_is_required() -> bool:
+    """Require durable storage on managed deployments, but allow local development."""
+    return (
+        os.environ.get("IDS_REQUIRE_DATABASE", "").strip().lower() in {"1", "true", "yes"}
+        or bool(os.environ.get("K_SERVICE", "").strip())
+    )
+
+
+def _require_database_configuration() -> None:
+    if _database_is_required() and not _database_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Experiment storage is not configured for this deployment.",
+        )
+
+
 def _db_call(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
@@ -193,6 +213,7 @@ def _decode_config(value: Any) -> dict[str, Any]:
 
 
 def _configured_config() -> dict[str, Any]:
+    _require_database_configuration()
     if _database_is_configured():
         saved = _db_call(database.get_setting, "experiment_config")
         if saved is not None:
@@ -388,6 +409,7 @@ def update_config(
 @app.get("/api/results")
 def get_results() -> dict[str, Any]:
     """Return results from the latest successful run, never a failed run."""
+    _require_database_configuration()
     if _database_is_configured():
         run = _db_call(database.get_latest_completed_run)
         if run is not None:
@@ -433,6 +455,7 @@ def _empty_results() -> dict[str, Any]:
 @app.get("/api/training-history")
 def get_training_history() -> list[dict[str, Any]]:
     """Return per-round federated training and evaluation history."""
+    _require_database_configuration()
     if _database_is_configured():
         active = _db_call(database.get_latest_active_run)
         run = active or _db_call(database.get_latest_completed_run)

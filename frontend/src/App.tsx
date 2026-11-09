@@ -305,6 +305,7 @@ function LoginScreen({
   onLogin: (password: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(notice);
   const [submitting, setSubmitting] = useState(false);
 
@@ -337,13 +338,23 @@ function LoginScreen({
           One secure workspace for intrusion insights, model performance, and
           adaptive detection.
         </p>
+        <div className="login-feature-list" aria-label="Workspace capabilities">
+          <span><i aria-hidden="true">✦</i> Adaptive insights</span>
+          <span><i aria-hidden="true">↗</i> Model performance</span>
+          <span><i aria-hidden="true">◈</i> Secure experiments</span>
+        </div>
         <div className="login-security-note">
           <span aria-hidden="true" />
-          Private administrator access
+          <span>Private administrator access</span>
         </div>
       </section>
       <section className="login-panel" aria-label="Administrator sign in">
         <form className="login-card" onSubmit={(event) => void handleSubmit(event)}>
+          <div className="login-card-topline">
+            <span className="login-live-dot" aria-hidden="true" />
+            <span>Secure workspace</span>
+            <span className="login-card-lock" aria-hidden="true">⌁</span>
+          </div>
           <div className="login-card-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path d="M12 3 19 6v5c0 4.7-2.9 8-7 10-4.1-2-7-5.3-7-10V6l7-3Z" />
@@ -354,16 +365,27 @@ function LoginScreen({
           <h2>Welcome back</h2>
           <p className="login-card-copy">Sign in to open your intrusion detection dashboard.</p>
           <label htmlFor="admin-password">Administrator password</label>
-          <input
-            id="admin-password"
-            className="login-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            autoFocus
-          />
+          <div className="login-password-wrap">
+            <input
+              id="admin-password"
+              className="login-password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+              autoFocus
+            />
+            <button
+              className="login-password-toggle"
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
           {error && <p className="login-error" role="alert">{error}</p>}
           <button className="login-submit" type="submit" disabled={submitting || !password}>
             {submitting ? "Signing in..." : "Sign in"}
