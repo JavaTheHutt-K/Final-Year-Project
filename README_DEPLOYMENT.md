@@ -59,9 +59,10 @@ service and `http://localhost:8080/` for the Gradio dashboard.
 
 1. Put `cicids2017_cleaned.csv` in a Cloud Storage bucket. Do not copy the
    dataset into the image or commit it to the repository.
-2. Build and deploy the image in your Google Cloud project. Mount the bucket
-   read-only at `/mnt/datasets` (the image's default `IDS_DATA_DIR`), or set
-   `IDS_DATA_DIR` to the mount path containing the CSV.
+2. Build and deploy the image in your Google Cloud project. The API service
+   does not need the dataset; the Cloud Run Job downloads it through the
+   Google Cloud Storage API using `IDS_GCS_BUCKET` and the configured object
+   name.
 3. Configure `FRONTEND_URL` to the exact HTTPS origin of the Vercel deployment,
    with no path or trailing slash, for example
    `https://your-project.vercel.app`. `FRONTEND_URL` takes precedence over the
@@ -69,17 +70,20 @@ service and `http://localhost:8080/` for the Gradio dashboard.
    wildcard origins are rejected. Set a comma-separated `IDS_CORS_ORIGINS`
    only if multiple production origins (for example, a Vercel preview) are
    intentionally allowed.
-4. Set `VITE_API_BASE_URL` in Vercel to the deployed Cloud Run service URL
-   (without `/api`), then rebuild/redeploy the frontend.
-5. Keep one Uvicorn worker. Run status, active training history, and
-   configuration edits are held in process memory or local files and are not
-   shared across Cloud Run instances.
+4. Set `VITE_API_BASE_URL` in Vercel to the canonical Cloud Run service URL
+   `https://ids-api-bo5h4puefa-bq.a.run.app` (without a trailing slash and
+   without `/api`), then rebuild/redeploy the frontend.
+5. Keep one Uvicorn worker for predictable request handling. Supabase is the
+   authoritative store for configuration, run status, history, and results;
+   local YAML/JSON files are only development and worker scratch copies.
 6. Configure `SUPABASE_URL` and `SUPABASE_KEY` on both the API service and Job.
    The key is a backend secret and must never be exposed to Vercel.
 7. Configure `CLOUD_RUN_PROJECT`, `CLOUD_RUN_REGION`, and `CLOUD_RUN_JOB` on
    the API service. Its service account needs permission to run that Job.
    Configure `IDS_GCS_BUCKET` on the Job and grant its service account object
-   read access. The object name comes from `dataset.gcs_object` (or
+   read access. Deploy the same image as a Cloud Run Job with the command
+   `python -m backend.job_worker`; the API passes `IDS_RUN_ID` when it starts
+   an execution. The object name comes from `dataset.gcs_object` (or
    `dataset.source_file` when omitted).
 8. Configure `GEMINI_API_KEY` and, optionally, `GEMINI_MODEL` on the API
    service. The default model is `gemini-2.5-flash`, called through the
@@ -103,9 +107,16 @@ gcloud run deploy adaptive-ids-api \
   --timeout 3600 \
   --max-instances 1 \
   --set-env-vars FRONTEND_URL=https://your-project.vercel.app,IDS_DATA_DIR=/mnt/datasets,IDS_RESULTS_DIR=/tmp/ids-results \
-  --add-volume name=dataset,type=cloud-storage,bucket=DATA_BUCKET,readonly=true \
-  --add-volume-mount volume=dataset,mount-path=/mnt/datasets \
   --no-allow-unauthenticated
+
+gcloud run jobs deploy adaptive-ids-training \
+  --image REGION-docker.pkg.dev/PROJECT/REPOSITORY/adaptive-ids-api:TAG \
+  --region REGION \
+  --command python \
+  --args=-m,backend.job_worker \
+  --tasks 1 \
+  --max-retries 0 \
+  --set-env-vars IDS_DATA_DIR=/tmp/ids-data,IDS_RESULTS_DIR=/tmp/ids-results,IDS_GCS_BUCKET=DATA_BUCKET
 ```
 
 The CPU, memory, request timeout, and maximum instances above are only an
@@ -119,18 +130,13 @@ needs capacity beyond those client CPUs for Ray, preprocessing, and the API.
 Supabase is the authoritative run/config/results store. Worker output files are
 temporary; completed results and training history are persisted to the
 `experiment_runs` table. The API checks Supabase before accepting another run,
-and does not report a run as started if Cloud Run Job launch fails. Use a single
-Cloud Run API instance to reduce start races; for strict multi-instance
-concurrency guarantees, enforce a unique active-run constraint or an atomic
-database lock in Supabase.
+and does not report a run as started if Cloud Run Job launch fails. The worker
+validates the UUID, downloads the dataset into its temporary directory, and
+marks failures in Supabase before exiting non-zero.
 
-The current in-service training route is retained for compatibility, but
-should be treated as best-effort only. For reliable production training, move
-the computation to a Cloud Run Job (or another durable worker), launch it
-through a queue/job API, and store job state/results in durable storage such as
-Cloud Storage or the existing planned Supabase integration. This separation
-has not been implemented here; it does not remove or replace the current
-Flower/Ray training behavior.
+The API and Job use the same image but different commands: the service starts
+`app:app`, while the Job starts `python -m backend.job_worker`. Training is
+therefore not run in the API process.
 
 ## Security
 

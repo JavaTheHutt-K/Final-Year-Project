@@ -208,6 +208,14 @@ def _configured_config() -> dict[str, Any]:
     return config
 
 
+def _write_local_config(config: dict[str, Any]) -> None:
+    """Keep the local YAML copy useful for development and image inspection."""
+    temporary_path = CONFIG_PATH.with_suffix(".yaml.tmp")
+    with temporary_path.open("w", encoding="utf-8", newline="\n") as config_file:
+        yaml.safe_dump(config, config_file, sort_keys=False, allow_unicode=True)
+    temporary_path.replace(CONFIG_PATH)
+
+
 def _validate_run_config(config: dict[str, Any]) -> None:
     dataset = config.get("dataset")
     training = config.get("training")
@@ -357,17 +365,23 @@ def update_config(
                 )
         config = _configured_config()
         for section, values in payload.items():
+            if not isinstance(config.get(section), dict):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Stored configuration section {section!r} is invalid.",
+                )
             config[section].update(values)
         if _database_is_configured():
             _db_call(database.save_setting, "experiment_config", json.dumps(config))
         try:
-            temporary_path = CONFIG_PATH.with_suffix(".yaml.tmp")
-            with temporary_path.open("w", encoding="utf-8", newline="\n") as config_file:
-                yaml.safe_dump(config, config_file, sort_keys=False, allow_unicode=True)
-            temporary_path.replace(CONFIG_PATH)
+            _write_local_config(config)
         except (OSError, yaml.YAMLError) as error:
-            logger.exception("Could not save dashboard settings")
-            raise HTTPException(status_code=500, detail="Could not save settings.") from error
+            if not _database_is_configured():
+                logger.exception("Could not save dashboard settings")
+                raise HTTPException(status_code=500, detail="Could not save settings.") from error
+            logger.warning(
+                "Could not update local configuration copy; Supabase remains authoritative."
+            )
     return config
 
 
@@ -498,14 +512,10 @@ def compare_with_ai(
             _ai_comparison_active = False
 
 
-def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini is not configured. Set GEMINI_API_KEY on the backend.",
-        )
-    results = get_results()
+def _metric_comparison(
+    results: dict[str, Any],
+    test_set: str,
+) -> dict[str, Any]:
     if not results.get("metrics"):
         raise HTTPException(status_code=404, detail="No completed experiment results are available.")
 
@@ -518,7 +528,7 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
     comparison: dict[str, Any] = {}
     metrics_by_model = results.get("metrics", {})
     for model, label in labels.items():
-        metrics = metrics_by_model.get(model, {}).get(payload.test_set)
+        metrics = metrics_by_model.get(model, {}).get(test_set)
         if isinstance(metrics, dict):
             comparison[label] = {
                 name: metrics[name]
@@ -534,10 +544,72 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
     if not {"Centralised", "Federated"}.issubset(comparison):
         raise HTTPException(
             status_code=404,
-            detail="Both centralised and federated metrics are required for this test set.",
+            detail=f"Both centralised and federated metrics are required for test set {test_set!r}.",
         )
+    return comparison
 
+
+def _metric_value(metrics: dict[str, Any], name: str) -> float | None:
+    value = metrics.get(name)
+    return float(value) if isinstance(value, (int, float)) and isfinite(value) else None
+
+
+def _deterministic_comparison(test_set: str, comparison: dict[str, Any]) -> str:
+    """Create a transparent interpretation without an external AI service."""
+    centralised = comparison["Centralised"]
+    federated = comparison["Federated"]
+    central_f1 = _metric_value(centralised, "f1_score")
+    federated_f1 = _metric_value(federated, "f1_score")
+    central_recall = _metric_value(centralised, "recall")
+    federated_recall = _metric_value(federated, "recall")
+    central_fpr = _metric_value(centralised, "false_positive_rate")
+    federated_fpr = _metric_value(federated, "false_positive_rate")
+
+    lines = [
+        f"Deterministic fallback analysis for the measured {test_set} results.",
+        "This interpretation uses only metrics saved by the experiment; it is not Gemini-generated.",
+    ]
+    if central_f1 is not None and federated_f1 is not None:
+        winner = "centralised" if central_f1 > federated_f1 else "federated"
+        if central_f1 == federated_f1:
+            winner = "both models"
+        lines.append(
+            f"F1-score: centralised {central_f1:.3f}; federated {federated_f1:.3f}. "
+            f"The higher measured F1-score is from {winner}."
+        )
+    if central_recall is not None and federated_recall is not None:
+        lines.append(
+            f"Recall: centralised {central_recall:.3f}; federated {federated_recall:.3f}. "
+            "Recall indicates the proportion of malicious samples detected."
+        )
+    if central_fpr is not None and federated_fpr is not None:
+        lines.append(
+            f"False-positive rate: centralised {central_fpr:.3f}; "
+            f"federated {federated_fpr:.3f}."
+        )
+    if "Centralised (updated)" in comparison and "Federated (updated)" in comparison:
+        lines.append(
+            "Updated centralised and federated metrics are also available in the saved results."
+        )
+    lines.append("These comparisons describe this holdout only and do not establish statistical significance.")
+    return "\n".join(lines)
+
+
+def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
+    results = get_results()
+    comparison = _metric_comparison(results, payload.test_set)
+    fallback = _deterministic_comparison(payload.test_set, comparison)
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     model = _optional_env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
+    if not api_key:
+        logger.info("Gemini is not configured; returning deterministic comparison.")
+        return {
+            "test_set": payload.test_set,
+            "analysis": fallback,
+            "source": "deterministic-fallback",
+            "model": "deterministic-fallback",
+        }
+
     prompt = (
         "Interpret the supplied intrusion-detection evaluation metrics. Compare "
         "centralised and federated approaches, including updated variants if "
@@ -554,25 +626,41 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, str]:
             model=model,
             contents=prompt,
         )
-    except ImportError as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini support is unavailable; install the google-genai dependency.",
-        ) from error
-    except Exception as error:
-        logger.exception("Gemini comparison request failed")
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini could not complete the comparison. Check the backend model configuration.",
-        ) from error
-    analysis = response.text
+    except ImportError:
+        logger.warning("Gemini support is unavailable; returning deterministic comparison.")
+        return {
+            "test_set": payload.test_set,
+            "analysis": fallback,
+            "source": "deterministic-fallback",
+            "model": "deterministic-fallback",
+        }
+    except Exception:
+        logger.warning("Gemini comparison failed for model %s; returning deterministic comparison.", model)
+        return {
+            "test_set": payload.test_set,
+            "analysis": fallback,
+            "source": "deterministic-fallback",
+            "model": "deterministic-fallback",
+        }
+    analysis = getattr(response, "text", None)
     if not isinstance(analysis, str) or not analysis.strip():
-        raise HTTPException(status_code=502, detail="Gemini returned an empty analysis.")
-    return {"test_set": payload.test_set, "analysis": analysis.strip()}
+        logger.warning("Gemini returned an empty comparison; returning deterministic comparison.")
+        return {
+            "test_set": payload.test_set,
+            "analysis": fallback,
+            "source": "deterministic-fallback",
+            "model": "deterministic-fallback",
+        }
+    return {
+        "test_set": payload.test_set,
+        "analysis": analysis.strip(),
+        "source": "gemini",
+        "model": model,
+    }
 
 
 @app.post("/api/insights")
-def generate_insights(_: None = Depends(require_admin)) -> dict[str, str]:
+def generate_insights(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Generate an interpretation of the latest successful experiment metrics."""
     global _ai_comparison_active
     with _state_lock:
@@ -590,7 +678,8 @@ def generate_insights(_: None = Depends(require_admin)) -> dict[str, str]:
         latest = _db_call(database.get_latest_completed_run) if _database_is_configured() else None
         return {
             "run_id": str(latest["id"]) if latest else "local-results",
-            "model": _optional_env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash",
+            "model": comparison["model"],
+            "source": comparison["source"],
             "insights": comparison["analysis"],
         }
     finally:

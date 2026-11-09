@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import yaml
 
@@ -51,7 +52,9 @@ def _load_saved_config() -> dict[str, Any]:
 def _download_dataset(config: dict[str, Any], data_dir: Path) -> Path:
     from google.cloud import storage
 
-    dataset = config.get("dataset", {})
+    dataset = config.get("dataset")
+    if not isinstance(dataset, dict):
+        raise RuntimeError("The saved experiment configuration has no valid dataset section.")
     bucket_name = os.environ.get("IDS_GCS_BUCKET", "").strip() or dataset.get("gcs_bucket")
     object_name = dataset.get("gcs_object") or dataset.get("source_file")
     if not isinstance(bucket_name, str) or not bucket_name.strip():
@@ -63,7 +66,10 @@ def _download_dataset(config: dict[str, Any], data_dir: Path) -> Path:
         raise RuntimeError("The configured GCS dataset object has an invalid filename.")
     data_dir.mkdir(parents=True, exist_ok=True)
     target = data_dir / filename
-    storage.Client().bucket(bucket_name).blob(object_name).download_to_filename(str(target))
+    try:
+        storage.Client().bucket(bucket_name).blob(object_name).download_to_filename(str(target))
+    except Exception as error:
+        raise RuntimeError("The experiment dataset could not be downloaded from Cloud Storage.") from error
     dataset["source_file"] = filename
     config.setdefault("paths", {})["raw_data_dir"] = str(data_dir)
     return target
@@ -71,6 +77,10 @@ def _download_dataset(config: dict[str, Any], data_dir: Path) -> Path:
 
 def execute_run(run_id: str) -> dict[str, Any]:
     """Download inputs, execute real training, and persist all run state."""
+    try:
+        UUID(run_id)
+    except (ValueError, AttributeError, TypeError) as error:
+        raise ValueError("run_id must be a valid UUID.") from error
     run = database.get_experiment_run(run_id)
     if run is None:
         raise RuntimeError(f"Experiment run {run_id!r} was not found.")

@@ -9,6 +9,7 @@ function InsightsPage() {
   const [comparison, setComparison] = useState<{
     testSet: string;
     analysis: string;
+    source: "gemini" | "deterministic-fallback";
   } | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [comparisonLoading, setComparisonLoading] = useState(false);
@@ -28,7 +29,9 @@ function InsightsPage() {
     setInsights("");
     try {
       const response = await generateAiInsights();
-      setInsights(response.insights);
+      setInsights(
+        `${response.source === "gemini" ? "Gemini-generated analysis" : "Deterministic fallback analysis"}\n\n${response.insights}`,
+      );
     } catch (error) {
       setInsightsError(getApiErrorMessage(error));
     } finally {
@@ -41,7 +44,11 @@ function InsightsPage() {
     setComparisonError(null);
     try {
       const response = await getAIComparison(activeTestSet);
-      setComparison({ testSet: response.test_set, analysis: response.analysis });
+      setComparison({
+        testSet: response.test_set,
+        analysis: response.analysis,
+        source: response.source,
+      });
     } catch (error) {
       setComparisonError(getApiErrorMessage(error));
     } finally {
@@ -88,7 +95,15 @@ function InsightsPage() {
         </button>
         {comparisonError && <p className="ai-analysis-error" role="alert">{comparisonError}</p>}
         {comparison?.testSet === activeTestSet && (
-          <div className="ai-analysis-content insights-content" aria-live="polite">{comparison.analysis}</div>
+          <div className="ai-analysis-content insights-content" aria-live="polite">
+            <strong>
+              {comparison.source === "gemini"
+                ? "Gemini-generated analysis"
+                : "Deterministic fallback analysis"}
+            </strong>
+            <br /><br />
+            {comparison.analysis}
+          </div>
         )}
         {!canCompare && !loading && (
           <div className="insights-empty">

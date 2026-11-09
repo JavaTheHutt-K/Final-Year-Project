@@ -53,6 +53,8 @@ def test_gemini_comparison_uses_saved_completed_metrics(monkeypatch):
     assert result == {
         "test_set": "Random holdout",
         "analysis": "Federated recall is higher.",
+        "source": "gemini",
+        "model": "gemini-2.5-flash",
     }
     assert captured["model"] == "gemini-2.5-flash"
     assert "Random holdout" in captured["contents"]
@@ -86,8 +88,32 @@ def test_ai_comparison_is_not_available_during_training(monkeypatch):
     assert response.status_code == 409
 
 
-def test_ai_comparison_requires_backend_gemini_key(monkeypatch):
+def test_ai_comparison_uses_deterministic_fallback_without_backend_gemini_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    with __import__("pytest").raises(Exception) as error:
-        api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
-    assert getattr(error.value, "status_code", None) == 503
+    monkeypatch.setattr(api, "get_results", saved_results)
+
+    result = api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    assert result["source"] == "deterministic-fallback"
+    assert result["model"] == "deterministic-fallback"
+    assert "F1-score" in result["analysis"]
+    assert "not Gemini-generated" in result["analysis"]
+
+
+def test_ai_comparison_falls_back_when_gemini_fails(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "backend-test-key")
+    monkeypatch.setattr(api, "get_results", saved_results)
+
+    def failing_client(**_kwargs):
+        raise RuntimeError("quota exhausted")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google",
+        SimpleNamespace(genai=SimpleNamespace(Client=failing_client)),
+    )
+
+    result = api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    assert result["source"] == "deterministic-fallback"
+    assert "measured" in result["analysis"]

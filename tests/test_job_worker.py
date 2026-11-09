@@ -5,7 +5,8 @@ from backend import job_worker
 
 
 def test_worker_persists_progress_history_and_completed_results(tmp_path, monkeypatch):
-    run = {"id": "run-1", "status": "queued", "training_history": []}
+    run_id = "00000000-0000-4000-8000-000000000001"
+    run = {"id": run_id, "status": "queued", "training_history": []}
     updates = []
     monkeypatch.setenv("IDS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("IDS_RESULTS_DIR", str(tmp_path / "results"))
@@ -19,7 +20,7 @@ def test_worker_persists_progress_history_and_completed_results(tmp_path, monkey
         return {"training_history": [{"round": 1}], "metrics": {"score": np.float64(0.8)}}
 
     monkeypatch.setattr(job_worker, "run_experiment", fake_run_experiment)
-    results = job_worker.execute_run("run-1")
+    results = job_worker.execute_run(run_id)
 
     assert results["metrics"]["score"] == 0.8
     assert updates[-1]["status"] == "completed"
@@ -28,13 +29,14 @@ def test_worker_persists_progress_history_and_completed_results(tmp_path, monkey
 
 
 def test_worker_marks_training_failure(tmp_path, monkeypatch):
+    run_id = "00000000-0000-4000-8000-000000000002"
     updates = []
     monkeypatch.setenv("IDS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("IDS_RESULTS_DIR", str(tmp_path / "results"))
     monkeypatch.setattr(
         job_worker.database,
         "get_experiment_run",
-        lambda _run_id: {"id": "run-2", "status": "running", "training_history": []},
+        lambda _run_id: {"id": run_id, "status": "running", "training_history": []},
     )
     monkeypatch.setattr(job_worker.database, "get_setting", lambda _key: {"dataset": {}, "training": {}, "paths": {}})
     monkeypatch.setattr(job_worker.database, "update_experiment_run", lambda _run_id, data: updates.append(data))
@@ -42,7 +44,7 @@ def test_worker_marks_training_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(job_worker, "run_experiment", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad dataset")))
 
     with pytest.raises(ValueError, match="bad dataset"):
-        job_worker.execute_run("run-2")
+        job_worker.execute_run(run_id)
 
     assert updates[-1]["status"] == "failed"
     assert "bad dataset" in updates[-1]["error"]
@@ -53,3 +55,8 @@ def test_worker_requires_run_id(monkeypatch):
     monkeypatch.delenv("IDS_RUN_ID", raising=False)
     with pytest.raises(RuntimeError, match="IDS_RUN_ID is required"):
         job_worker.main()
+
+
+def test_worker_rejects_invalid_run_id():
+    with pytest.raises(ValueError, match="valid UUID"):
+        job_worker.execute_run("not-a-uuid")

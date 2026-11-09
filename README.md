@@ -99,12 +99,18 @@ redeploy after changing the value. The frontend calls the API's existing
 `/api/...` endpoints on that origin. Local frontend development continues to
 use the API on port `8000` unless `VITE_API_BASE_URL` is set.
 
-This API currently has **no authentication**. Anyone who can reach its public
-routes can read available data, change experiment settings, and start
-resource-intensive runs. Do not expose it to sensitive data or a public
-production workload without adding access control, rate limits, and run quotas.
-Generated experiment status is stored in memory and is reset whenever the
-Cloud Run instance restarts; use one API process.
+The dashboard's administrative operations use short-lived bearer tokens issued
+by the backend. Keep `ADMIN_PASSWORD_HASH`, `ADMIN_TOKEN_SECRET`,
+`SUPABASE_KEY`, and `GEMINI_API_KEY` server-side; they must never be added to
+frontend environment variables. Experiment status and results are read from
+Supabase when configured, so they remain consistent across API instances.
+
+AI Insights and model comparison use Gemini only when `GEMINI_API_KEY` is
+configured on the backend. If the key is missing or Gemini is unavailable due
+to quota, rate limits, model availability, network failure, or an invalid
+response, the API returns a deterministic interpretation derived from saved
+experiment metrics. Responses identify the source as either `gemini` or
+`deterministic-fallback`; no paid AI provider is used.
 
 ## Run the dashboard
 
