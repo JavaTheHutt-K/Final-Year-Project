@@ -129,6 +129,10 @@ button { cursor: pointer; }
 .insights-content p:last-child { margin-bottom: 0; }
 .insights-content li { margin: 0 0 7px 18px; padding-left: 3px; }
 .insights-content li:last-child { margin-bottom: 0; }
+.ai-table-wrap { max-width: 100%; margin: 8px 0 14px; overflow-x: auto; }
+.ai-table-wrap table { width: 100%; min-width: 480px; border-collapse: collapse; text-align: left; }
+.ai-table-wrap th, .ai-table-wrap td { padding: 8px 10px; border: 1px solid #e4ebf3; vertical-align: top; }
+.ai-table-wrap th { color: #263a53; background: #f3f7fc; font-weight: 700; }
 .ai-analysis-spacer { height: 7px; }
 .insights-hint { margin: 25px 0 6px; color: #8996a6; font-size: 11px; }
 .insights-empty .empty-chart { min-height: 130px; }

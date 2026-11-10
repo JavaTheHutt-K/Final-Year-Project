@@ -607,8 +607,11 @@ def _metric_comparison(
     }
     comparison: dict[str, Any] = {}
     metrics_by_model = results.get("metrics", {})
+    if not isinstance(metrics_by_model, dict):
+        raise HTTPException(status_code=404, detail="No completed experiment metrics are available.")
     for model, label in labels.items():
-        metrics = metrics_by_model.get(model, {}).get(test_set)
+        model_results = metrics_by_model.get(model)
+        metrics = model_results.get(test_set) if isinstance(model_results, dict) else None
         if isinstance(metrics, dict):
             comparison[label] = {
                 name: metrics[name]
@@ -621,10 +624,10 @@ def _metric_comparison(
                 )
                 if name in metrics
             }
-    if not {"Centralised", "Federated"}.issubset(comparison):
+    if not comparison:
         raise HTTPException(
             status_code=404,
-            detail=f"Both centralised and federated metrics are required for test set {test_set!r}.",
+            detail=f"No saved model metrics are available for test set {test_set!r}.",
         )
     return comparison
 
@@ -635,14 +638,20 @@ def _metric_value(metrics: dict[str, Any], name: str) -> float | None:
 
 
 def _clean_ai_output(analysis: str) -> str:
-    """Remove accidental Markdown emphasis and code delimiters from AI output."""
+    """Remove unsafe Markdown markers while preserving table delimiters and values."""
     cleaned_lines = []
     for line in analysis.replace("*", "").replace("`", "").splitlines():
         line = line.lstrip("#").strip()
-        if "|" in line:
-            line = " - ".join(part.strip() for part in line.split("|") if part.strip())
         cleaned_lines.append(line)
-    return "\n".join(cleaned_lines).strip()
+    compact_lines = []
+    previous_blank = False
+    for line in cleaned_lines:
+        blank = not line
+        if blank and previous_blank:
+            continue
+        compact_lines.append(line)
+        previous_blank = blank
+    return "\n".join(compact_lines).strip()
 
 
 def _saved_test_set(results: dict[str, Any]) -> str | None:
@@ -677,11 +686,11 @@ def _deterministic_comparison(test_set: str, comparison: dict[str, Any]) -> str:
         )
         if false_negatives is not None:
             measured += f"; false negatives {false_negatives:.0f}"
-        if measured:
-            lines.append(f"{label}: {measured}.")
+        lines.append(f"{label}: {measured or 'no supplied numeric metrics'}.")
 
     leaders = (
         ("highest F1-score", "f1_score", max),
+        ("highest precision", "precision", max),
         ("highest recall", "recall", max),
         ("lowest false-positive rate", "false_positive_rate", min),
     )
@@ -770,9 +779,9 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
             "6. Overall F1-Score Comparison, 7. Performance Trade-offs, 8. Research "
             "Findings and Conclusion, and 9. Experimental Limitations. Omit sections "
             "that are not relevant or cannot be supported by the supplied metrics. "
-            "Compare all available configurations and identify the highest F1-score, "
-            "highest recall, lowest false-positive rate, and lowest number of false "
-            "negatives. Explain why these metrics matter in intrusion detection without "
+            "Compare all available configurations and identify the highest precision, "
+            "highest F1-score, highest recall, lowest false-positive rate, and lowest "
+            "number of false negatives. Explain why these metrics matter in intrusion detection without "
             "inventing causes or claiming universal superiority. State when a metric "
             "was not provided and that conclusions apply only to the supplied holdout "
             "test set. Use only the supplied metrics and format them to four decimal "

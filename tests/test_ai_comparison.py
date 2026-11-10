@@ -55,6 +55,31 @@ def saved_results_with_updates():
     return results
 
 
+def saved_results_with_missing_and_null_metrics():
+    return {
+        "metrics": {
+            "centralised": {
+                "Random holdout": {
+                    "precision": None,
+                    "recall": 0.8,
+                    "f1_score": 0.7,
+                    "false_positive_rate": 0.1,
+                    "confusion_matrix": {"fn": 20},
+                }
+            },
+            "federated_updated": {
+                "Random holdout": {
+                    "precision": 0.95,
+                    "recall": 0.8,
+                    "f1_score": 0.7,
+                    "false_positive_rate": 0.1,
+                    "confusion_matrix": {"fn": 20},
+                }
+            },
+        }
+    }
+
+
 def test_groq_comparison_uses_saved_completed_metrics(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "backend-test-key")
@@ -126,6 +151,113 @@ def test_groq_output_is_cleaned_without_losing_supplied_metrics(monkeypatch):
     assert "`" not in result["analysis"]
     for metric_value in ("0.9000", "0.8000", "0.8500", "0.1000", "0.8800", "0.8400", "0.8600", "0.1200"):
         assert metric_value in result["analysis"]
+
+
+def test_output_cleaning_preserves_table_delimiters_and_collapses_blank_lines():
+    cleaned = api._clean_ai_output(
+        "# Results\n\n\n| Model | F1-score |\n| --- | --- |\n| Centralised | 0.8500 |"
+    )
+
+    assert "*" not in cleaned
+    assert "`" not in cleaned
+    assert "0.8500" in cleaned
+    assert "| Model | F1-score |" in cleaned
+    assert "\n\n\n" not in cleaned
+
+
+def test_deterministic_fallback_handles_missing_null_and_tied_metrics(monkeypatch):
+    monkeypatch.setattr(api, "get_results", saved_results_with_missing_and_null_metrics)
+    monkeypatch.setenv("AI_PROVIDER", "unsupported")
+
+    result = api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    assert result["source"] == "deterministic-fallback"
+    assert "Centralised:" in result["analysis"]
+    assert "Federated (updated):" in result["analysis"]
+    assert "highest recall is 0.8000, recorded by Centralised, Federated (updated)" in result["analysis"]
+    assert "highest precision is 0.9500" in result["analysis"]
+    assert "false negatives is 20, recorded by Centralised, Federated (updated)" in result["analysis"]
+    assert "precision None" not in result["analysis"]
+
+
+def test_comparison_allows_missing_original_configurations(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "get_results",
+        lambda: {"metrics": {"centralised_updated": saved_results_with_updates()["metrics"]["centralised_updated"]}},
+    )
+    monkeypatch.setenv("AI_PROVIDER", "unsupported")
+
+    result = api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    assert result["source"] == "deterministic-fallback"
+    assert "Centralised (updated)" in result["analysis"]
+
+
+def test_insights_request_accepts_no_body_and_question_boundaries(monkeypatch):
+    monkeypatch.setattr(api, "get_results", saved_results)
+    monkeypatch.setattr(
+        api,
+        "_request_ai_comparison",
+        lambda payload: {
+            "test_set": payload.test_set,
+            "analysis": payload.question or "general summary",
+            "source": "deterministic-fallback",
+            "model": "deterministic-fallback",
+        },
+    )
+    monkeypatch.setenv("ADMIN_TOKEN_SECRET", "test-token-secret-that-is-long-enough")
+    token = issue_admin_token()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(api.app) as client:
+        no_body = client.post("/api/insights", headers=headers)
+        exact_limit = client.post(
+            "/api/insights",
+            json={"question": "x" * 2000},
+            headers=headers,
+        )
+        over_limit = client.post(
+            "/api/insights",
+            json={"question": "x" * 2001},
+            headers=headers,
+        )
+
+    assert no_body.status_code == 200
+    assert exact_limit.status_code == 200
+    assert over_limit.status_code == 422
+
+
+def test_comparison_prompt_requests_precision_and_all_leaders(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "backend-test-key")
+    monkeypatch.setattr(api, "get_results", saved_results_with_updates)
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="analysis"))]
+        )
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "groq",
+        SimpleNamespace(
+            Groq=lambda **_kwargs: SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            )
+        ),
+    )
+
+    api._request_ai_comparison(api.AIComparisonRequest(test_set="Random holdout"))
+
+    prompt = captured["messages"][1]["content"].lower()
+    assert "highest precision" in prompt
+    assert "highest f1-score" in prompt
+    assert "highest recall" in prompt
+    assert "lowest false-positive rate" in prompt
+    assert "lowest number of false negatives" in prompt
 
 
 def test_comparison_prompt_includes_all_available_configurations(monkeypatch):
