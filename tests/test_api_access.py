@@ -16,6 +16,34 @@ def test_read_only_api_and_health_are_public_but_status_requires_storage():
         assert client.post("/api/insights").status_code == 401
 
 
+def test_training_history_falls_back_to_saved_results_when_run_history_is_empty(monkeypatch):
+    history = [
+        {
+            "model": "federated",
+            "round": 1,
+            "clients": {"Client 1": 10, "Client 2": 11, "Client 3": 12},
+        }
+    ]
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test-key")
+    monkeypatch.setattr(
+        api.database,
+        "get_latest_active_run",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        api.database,
+        "get_latest_completed_run",
+        lambda: {
+            "id": "run-1",
+            "training_history": [],
+            "results": {"training_history": history},
+        },
+    )
+
+    assert api.get_training_history() == history
+
+
 def test_admin_login_issues_expiring_signed_token(monkeypatch):
     import base64
     import hashlib

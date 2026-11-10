@@ -20,8 +20,8 @@ port. The Vite frontend remains a separate Vercel deployment.
   | GET | `/api/training-history` | Read round history |
   | GET | `/api/metrics?model=...&test_set=...` | Read model metrics |
   | POST | `/api/auth/login` | Exchange the administrator password for a short-lived bearer token |
-  | POST | `/api/ai/compare` | Request a post-run Gemini interpretation (admin only) |
-  | POST | `/api/insights` | Generate insights from the latest completed run (admin only) |
+  | POST | `/api/ai/compare` | Request a post-run Groq interpretation (admin only) |
+  | POST | `/api/insights` | Generate insights from the latest completed run; accepts optional `{"question":"..."}` (admin only) |
   | POST | `/api/run` | Queue an experiment in the configured Cloud Run Job (admin only) |
   | GET | `/api/run/status` | Read persisted run status |
 
@@ -87,9 +87,12 @@ service and `http://localhost:8080/` for the Gradio dashboard.
    `python -m backend.job_worker`; the API passes `IDS_RUN_ID` when it starts
    an execution. The object name comes from `dataset.gcs_object` (or
    `dataset.source_file` when omitted).
-8. Configure `GEMINI_API_KEY` and, optionally, `GEMINI_MODEL` on the API
-   service. The default model is `gemini-2.5-flash`, called through the
-   `google-genai` SDK. Never use `VITE_*` variables for this key.
+8. Configure `AI_PROVIDER=groq`, `GROQ_API_KEY`, and optionally `GROQ_MODEL` on
+   the API service. The default model is `llama-3.3-70b-versatile`, verified
+   against Groq's supported-model catalogue and called through the official
+   `groq` Python SDK. Never use `VITE_*` variables for this key. Groq failures,
+   rate limits, exhausted quotas, timeouts, invalid credentials, unavailable
+   models, and empty responses use the deterministic metrics fallback.
 9. Create a PBKDF2-SHA256 password hash for `ADMIN_PASSWORD_HASH`, set a random
    `ADMIN_TOKEN_SECRET` of at least 32 bytes, and set `GRADIO_ADMIN_USERNAME`.
    The API login endpoint returns a one-hour signed bearer token. The Gradio
@@ -142,7 +145,7 @@ therefore not run in the API process.
 
 ## Security
 
-Administrative settings, experiment start, and Gemini endpoints require a
+Administrative settings, experiment start, and Groq endpoints require a
 valid short-lived signed administrator bearer token. Password verification uses
 a PBKDF2-SHA256 hash; tokens are HMAC-signed and expire after one hour. Gradio's
 administrative launch action is gated by its authenticated username and the

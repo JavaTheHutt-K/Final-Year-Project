@@ -5,11 +5,15 @@ import { EmptyState, PageHeading, Panel } from "../components";
 
 function InsightsPage() {
   const { results, testSets, selectedTestSet, loading, running } = useDashboard();
-  const [insights, setInsights] = useState("");
+  const [question, setQuestion] = useState("");
+  const [insights, setInsights] = useState<{
+    text: string;
+    source: "groq" | "deterministic-fallback";
+  } | null>(null);
   const [comparison, setComparison] = useState<{
     testSet: string;
     analysis: string;
-    source: "gemini" | "deterministic-fallback";
+    source: "groq" | "deterministic-fallback";
   } | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [comparisonLoading, setComparisonLoading] = useState(false);
@@ -26,12 +30,9 @@ function InsightsPage() {
   const handleGenerateInsights = async () => {
     setInsightsLoading(true);
     setInsightsError(null);
-    setInsights("");
     try {
-      const response = await generateAiInsights();
-      setInsights(
-        `${response.source === "gemini" ? "Gemini-generated analysis" : "Deterministic fallback analysis"}\n\n${response.insights}`,
-      );
+      const response = await generateAiInsights(question);
+      setInsights({ text: response.insights, source: response.source });
     } catch (error) {
       setInsightsError(getApiErrorMessage(error));
     } finally {
@@ -64,19 +65,42 @@ function InsightsPage() {
         description="Explore generated findings from the latest experiment and get an explanation of the selected model comparison."
       />
       <Panel
-        title="Experiment insights"
-        subtitle="Generate a summary of the latest completed experiment."
+        title="Ask the experiment"
+        subtitle="Ask a question about the latest completed experiment, or leave it blank for a general summary."
         className="insights-panel"
       >
-        <button
-          className="button button-primary"
-          onClick={handleGenerateInsights}
-          disabled={insightsLoading || loading || running}
-        >
-          {insightsLoading ? "Generating insights…" : "Generate insights"}
-        </button>
+        <div className="ai-input-card">
+          <label htmlFor="insights-question">Your question</label>
+          <textarea
+            id="insights-question"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="For example: Which model has the better recall, and what tradeoff does it show?"
+            maxLength={2000}
+            rows={4}
+            disabled={insightsLoading || loading || running}
+          />
+          <div className="ai-input-footer">
+            <span>{question.length}/2000 characters</span>
+            <button
+              className="button button-primary"
+              onClick={handleGenerateInsights}
+              disabled={insightsLoading || loading || running}
+            >
+              {insightsLoading ? "Generating insights…" : "Ask AI"}
+            </button>
+          </div>
+        </div>
         {insightsError && <p className="ai-analysis-error" role="alert">{insightsError}</p>}
-        {insights && <div className="ai-analysis-content insights-content" aria-live="polite">{insights}</div>}
+        {insights && (
+          <div className="ai-output-card" aria-live="polite">
+            <div className="ai-output-heading">
+              <strong>AI insight</strong>
+              <span>{insights.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
+            </div>
+            <div className="ai-analysis-content insights-content">{insights.text}</div>
+          </div>
+        )}
         {!insights && !insightsError && (
           <p className="insights-hint">Insights will appear here after generation.</p>
         )}
@@ -95,14 +119,12 @@ function InsightsPage() {
         </button>
         {comparisonError && <p className="ai-analysis-error" role="alert">{comparisonError}</p>}
         {comparison?.testSet === activeTestSet && (
-          <div className="ai-analysis-content insights-content" aria-live="polite">
-            <strong>
-              {comparison.source === "gemini"
-                ? "Gemini-generated analysis"
-                : "Deterministic fallback analysis"}
-            </strong>
-            <br /><br />
-            {comparison.analysis}
+          <div className="ai-output-card" aria-live="polite">
+            <div className="ai-output-heading">
+              <strong>Model comparison insight</strong>
+              <span>{comparison.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
+            </div>
+            <div className="ai-analysis-content insights-content">{comparison.analysis}</div>
           </div>
         )}
         {!canCompare && !loading && (

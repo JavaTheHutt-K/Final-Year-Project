@@ -84,13 +84,19 @@ list of exact origins. For Cloud Run deployment configuration and limitations, s
 [README_DEPLOYMENT.md](README_DEPLOYMENT.md).
 
 The results page can optionally request an AI explanation of a completed
-centralised-versus-federated comparison. Configure `AI_API_KEY` on the backend
-(and optionally `AI_MODEL` and `AI_BASE_URL`) to enable it. The request sends only
-the selected test set's summary metrics to an OpenAI-compatible chat completions
-endpoint; it does not send the dataset or model artifacts. AI analysis is
-user-triggered, is unavailable during an experiment, and never changes measured
-metrics or model training. Without the API key, normal experiment and dashboard
-functionality remains available.
+centralised-versus-federated comparison. Configure `AI_PROVIDER=groq`,
+`GROQ_API_KEY`, and optionally `GROQ_MODEL` on the backend. The default model is
+`llama-3.3-70b-versatile`, which is listed as a production model in the
+[Groq supported-model catalogue](https://console.groq.com/docs/models). The
+request sends only the selected test set's summary metrics to Groq's
+server-side chat-completions API; it never sends the dataset or model artifacts.
+AI analysis is user-triggered, is unavailable during an experiment, and never
+changes measured metrics or model training. Missing credentials, invalid keys,
+rate limits, exhausted quotas, timeouts, unavailable models, SDK failures, and
+empty responses use the deterministic fallback. Responses identify whether the
+source was `groq` or `deterministic-fallback`. The Insights page also accepts an
+optional user question; it is sent as context to the backend with the same
+metrics-only restriction and is limited to 2,000 characters.
 
 ## Deploy the frontend to Vercel
 
@@ -105,16 +111,15 @@ use the API on port `8000` unless `VITE_API_BASE_URL` is set.
 
 The dashboard's administrative operations use short-lived bearer tokens issued
 by the backend. Keep `ADMIN_PASSWORD_HASH`, `ADMIN_TOKEN_SECRET`,
-`SUPABASE_KEY`, and `GEMINI_API_KEY` server-side; they must never be added to
+`SUPABASE_KEY`, and `GROQ_API_KEY` server-side; they must never be added to
 frontend environment variables. Experiment status and results are read from
 Supabase when configured, so they remain consistent across API instances.
 
-AI Insights and model comparison use Gemini only when `GEMINI_API_KEY` is
-configured on the backend. If the key is missing or Gemini is unavailable due
-to quota, rate limits, model availability, network failure, or an invalid
-response, the API returns a deterministic interpretation derived from saved
-experiment metrics. Responses identify the source as either `gemini` or
-`deterministic-fallback`; no paid AI provider is used.
+AI Insights and model comparison use Groq only when `AI_PROVIDER=groq` and
+`GROQ_API_KEY` are configured on the backend. Groq calls are made only from
+FastAPI; no key is sent to the browser. The API sends a compact JSON summary of
+saved metrics, never the CICIDS2017 dataset. When Groq is unavailable, the API
+returns a deterministic interpretation derived from saved experiment metrics.
 
 ## Run the dashboard
 

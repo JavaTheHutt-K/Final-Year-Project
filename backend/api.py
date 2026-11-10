@@ -54,6 +54,7 @@ _ai_comparison_active = False
 
 class AIComparisonRequest(BaseModel):
     test_set: str = Field(min_length=1, max_length=120)
+    question: str | None = Field(default=None, max_length=2000)
 
 
 class AdminLoginRequest(BaseModel):
@@ -513,8 +514,10 @@ def get_training_history() -> list[dict[str, Any]]:
                 history = json.loads(history)
             except json.JSONDecodeError as error:
                 raise HTTPException(status_code=500, detail="Saved training history is invalid.") from error
-        if history is None and isinstance(run.get("results"), dict):
-            history = run["results"].get("training_history", [])
+        if not history and isinstance(run.get("results"), dict):
+            saved_history = run["results"].get("training_history", [])
+            if isinstance(saved_history, list):
+                history = saved_history
         if not isinstance(history, list):
             raise HTTPException(status_code=500, detail="Saved training history is invalid.")
         return history
@@ -636,7 +639,7 @@ def _deterministic_comparison(test_set: str, comparison: dict[str, Any]) -> str:
 
     lines = [
         f"Deterministic fallback analysis for the measured {test_set} results.",
-        "This interpretation uses only metrics saved by the experiment; it is not Gemini-generated.",
+        "This interpretation uses only metrics saved by the experiment; it is not Groq-generated.",
     ]
     if central_f1 is not None and federated_f1 is not None:
         winner = "centralised" if central_f1 > federated_f1 else "federated"
@@ -668,16 +671,21 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
     results = get_results()
     comparison = _metric_comparison(results, payload.test_set)
     fallback = _deterministic_comparison(payload.test_set, comparison)
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    model = _optional_env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
+    provider = (_optional_env("AI_PROVIDER", "groq") or "groq").lower()
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    model = _optional_env("GROQ_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"
+    fallback_response = {
+        "test_set": payload.test_set,
+        "analysis": fallback,
+        "source": "deterministic-fallback",
+        "model": "deterministic-fallback",
+    }
+    if provider != "groq":
+        logger.warning("Unsupported AI_PROVIDER=%s; returning deterministic comparison.", provider)
+        return fallback_response
     if not api_key:
-        logger.info("Gemini is not configured; returning deterministic comparison.")
-        return {
-            "test_set": payload.test_set,
-            "analysis": fallback,
-            "source": "deterministic-fallback",
-            "model": "deterministic-fallback",
-        }
+        logger.info("Groq is not configured; returning deterministic comparison.")
+        return fallback_response
 
     prompt = (
         "Interpret the supplied intrusion-detection evaluation metrics. Compare "
@@ -688,62 +696,84 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
         "your text is an interpretation. Be concise.\n\n"
         + json.dumps({"test_set": payload.test_set, "metrics": comparison})
     )
+    if payload.question and payload.question.strip():
+        prompt += (
+            "\n\nAnswer this user question using only the supplied metrics. "
+            "If the metrics do not support an answer, say so clearly:\n"
+            + payload.question.strip()
+        )
     try:
-        from google import genai
+        from groq import Groq
 
-        response = genai.Client(api_key=api_key).models.generate_content(
+        response = Groq(api_key=api_key, timeout=30.0).chat.completions.create(
             model=model,
-            contents=prompt,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You interpret saved intrusion-detection metrics only. "
+                        "Do not request or infer dataset contents."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
         )
     except ImportError:
-        logger.warning("Gemini support is unavailable; returning deterministic comparison.")
-        return {
-            "test_set": payload.test_set,
-            "analysis": fallback,
-            "source": "deterministic-fallback",
-            "model": "deterministic-fallback",
-        }
-    except Exception:
-        logger.warning("Gemini comparison failed for model %s; returning deterministic comparison.", model)
-        return {
-            "test_set": payload.test_set,
-            "analysis": fallback,
-            "source": "deterministic-fallback",
-            "model": "deterministic-fallback",
-        }
-    analysis = getattr(response, "text", None)
+        logger.warning("Groq support is unavailable; returning deterministic comparison.")
+        return fallback_response
+    except Exception as error:
+        status_code = getattr(error, "status_code", None)
+        if status_code in {401, 403}:
+            reason = "credentials were rejected"
+        elif status_code == 404:
+            reason = "the configured model is unavailable"
+        elif status_code == 429:
+            reason = "the request was rate-limited or the quota is exhausted"
+        elif error.__class__.__name__ in {"APITimeoutError", "TimeoutError"}:
+            reason = "the request timed out"
+        else:
+            reason = "the provider request failed"
+        logger.warning("Groq comparison failed for model %s: %s; using fallback.", model, reason)
+        return fallback_response
+    choices = getattr(response, "choices", None)
+    message = choices[0].message if isinstance(choices, list) and choices else None
+    analysis = getattr(message, "content", None)
     if not isinstance(analysis, str) or not analysis.strip():
-        logger.warning("Gemini returned an empty comparison; returning deterministic comparison.")
-        return {
-            "test_set": payload.test_set,
-            "analysis": fallback,
-            "source": "deterministic-fallback",
-            "model": "deterministic-fallback",
-        }
+        logger.warning("Groq returned an empty comparison; returning deterministic comparison.")
+        return fallback_response
     return {
         "test_set": payload.test_set,
         "analysis": analysis.strip(),
-        "source": "gemini",
+        "source": "groq",
         "model": model,
     }
 
 
 @app.post("/api/insights")
-def generate_insights(_: None = Depends(require_admin)) -> dict[str, Any]:
+def generate_insights(
+    payload: AIComparisonRequest | None = None,
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
     """Generate an interpretation of the latest successful experiment metrics."""
     global _ai_comparison_active
     with _state_lock:
         if _database_is_configured() and _db_call(database.get_latest_active_run):
-            raise HTTPException(status_code=409, detail="Gemini analysis is unavailable while an experiment is running.")
+            raise HTTPException(status_code=409, detail="Groq analysis is unavailable while an experiment is running.")
         if _ai_comparison_active:
-            raise HTTPException(status_code=409, detail="Another Gemini analysis is already in progress.")
+            raise HTTPException(status_code=409, detail="Another Groq analysis is already in progress.")
         _ai_comparison_active = True
     try:
         results = get_results()
         test_set = next(iter(results.get("metrics", {}).get("federated", {})), None)
         if not test_set:
             raise HTTPException(status_code=404, detail="No completed federated metrics are available.")
-        comparison = _request_ai_comparison(AIComparisonRequest(test_set=test_set))
+        comparison = _request_ai_comparison(
+            AIComparisonRequest(
+                test_set=test_set,
+                question=payload.question if payload else None,
+            )
+        )
         latest = _db_call(database.get_latest_completed_run) if _database_is_configured() else None
         return {
             "run_id": str(latest["id"]) if latest else "local-results",

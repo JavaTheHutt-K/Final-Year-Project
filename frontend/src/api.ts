@@ -125,11 +125,11 @@ export async function getMetrics(
 
 export async function getAIComparison(
   testSet: string,
-): Promise<{ test_set: string; analysis: string; source: "gemini" | "deterministic-fallback"; model: string }> {
+): Promise<{ test_set: string; analysis: string; source: "groq" | "deterministic-fallback"; model: string }> {
   const { data } = await api.post<{
     test_set: string;
     analysis: string;
-    source: "gemini" | "deterministic-fallback";
+    source: "groq" | "deterministic-fallback";
     model: string;
   }>(
     "/api/ai/compare",
@@ -178,14 +178,14 @@ export function getApiErrorMessage(error: unknown): string {
 export interface AiInsightsResponse {
   run_id: string;
   model: string;
-  source: "gemini" | "deterministic-fallback";
+  source: "groq" | "deterministic-fallback";
   insights: string;
 }
 
-export async function generateAiInsights(): Promise<AiInsightsResponse> {
+export async function generateAiInsights(question?: string): Promise<AiInsightsResponse> {
   const { data } = await api.post<AiInsightsResponse>(
     "/api/insights",
-    undefined,
+    question?.trim() ? { question: question.trim() } : undefined,
     { timeout: 45_000 },
   );
   return data;
