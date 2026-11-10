@@ -32,6 +32,10 @@ Vercel, see [README_DEPLOYMENT.md](README_DEPLOYMENT.md).
 
 Generated cleaning reports and experiment results are written under `results/` and are not tracked by Git.
 
+For the optional Camber research workflow, including authentication limitations,
+the specialist-agent brief, safe mirroring policy, and local analysis commands,
+see [docs/CAMBER_INTEGRATION.md](docs/CAMBER_INTEGRATION.md).
+
 ## Run the backend
 
 From the project root, activate the Python environment and run the complete
