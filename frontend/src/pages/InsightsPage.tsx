@@ -2,6 +2,7 @@ import { useState, type ReactElement } from "react";
 import { generateAiInsights, getAIComparison, getApiErrorMessage } from "../api";
 import { useDashboard } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel } from "../components";
+import { MODEL_COLORS, MODEL_IDS, MODEL_LABELS, formatMetric } from "../dashboardConstants";
 import type { ModelId } from "../types";
 
 const sectionHeadingPattern = /^\d+\.\s+\S/;
@@ -103,6 +104,35 @@ function renderAiAnalysis(text: string) {
   return elements;
 }
 
+function AiOutput({
+  title,
+  source,
+  text,
+}: {
+  title: string;
+  source: "groq" | "deterministic-fallback";
+  text: string;
+}) {
+  return (
+    <div className="ai-output-card" aria-live="polite">
+      <div className="ai-output-heading">
+        <div className="ai-output-title">
+          <span className="ai-output-icon" aria-hidden="true">✦</span>
+          <div>
+            <strong>{title}</strong>
+            <small>Interpretation based on the saved experiment results</small>
+          </div>
+        </div>
+        <span className={`ai-source-badge ${source === "groq" ? "is-ai" : "is-fallback"}`}>
+          <i aria-hidden="true" />
+          {source === "groq" ? "AI-generated" : "Transparent fallback"}
+        </span>
+      </div>
+      <div className="ai-analysis-content insights-content">{renderAiAnalysis(text)}</div>
+    </div>
+  );
+}
+
 function InsightsPage() {
   const { results, testSets, selectedTestSet, loading, running } = useDashboard();
   const [question, setQuestion] = useState("");
@@ -125,6 +155,18 @@ function InsightsPage() {
     activeTestSet
       && comparisonModelIds
         .some((model) => comparisonMetrics?.[model]?.[activeTestSet]),
+  );
+  const modelSnapshot = MODEL_IDS.map((model) => ({
+    model,
+    metrics: activeTestSet ? comparisonMetrics?.[model]?.[activeTestSet] : undefined,
+  }));
+  const availableSnapshot = modelSnapshot.filter(({ metrics }) => metrics);
+  const strongestModel = availableSnapshot.reduce<typeof availableSnapshot[number] | null>(
+    (best, current) =>
+      !best || (current.metrics?.f1_score ?? -1) > (best.metrics?.f1_score ?? -1)
+        ? current
+        : best,
+    null,
   );
 
   const handleGenerateInsights = async () => {
@@ -164,6 +206,36 @@ function InsightsPage() {
         title="Insights"
         description="Explore generated findings from the latest experiment and get an explanation of the selected model comparison."
       />
+      <section className="insights-context" aria-label="Experiment evidence">
+        <div className="insights-context-heading">
+          <div>
+            <span className="eyebrow">EVIDENCE SNAPSHOT</span>
+            <h2>{activeTestSet || "No evaluated test set selected"}</h2>
+          </div>
+          <span className="insights-context-note">
+            {availableSnapshot.length ? `${availableSnapshot.length} model variants available` : "Run an evaluation to unlock evidence"}
+          </span>
+        </div>
+        <div className="insights-model-grid">
+          {modelSnapshot.map(({ model, metrics }) => (
+            <div className={`insights-model-card ${strongestModel?.model === model ? "is-strongest" : ""}`} key={model}>
+              <div className="insights-model-name">
+                <i style={{ backgroundColor: MODEL_COLORS[model] }} />
+                <span>{MODEL_LABELS[model]}</span>
+                {strongestModel?.model === model && <b>TOP F1</b>}
+              </div>
+              <div className="insights-model-values">
+                <span><strong>{formatMetric(metrics?.f1_score)}</strong><small>F1-score</small></span>
+                <span><strong>{formatMetric(metrics?.recall)}</strong><small>Recall</small></span>
+                <span><strong>{formatMetric(metrics?.false_positive_rate)}</strong><small>False positives</small></span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="insights-context-footnote">
+          F1-score balances precision and recall. A lower false-positive rate means fewer benign records are incorrectly flagged.
+        </p>
+      </section>
       <Panel
         title="Ask the experiment"
         subtitle="Ask a question about the latest completed experiment, or leave it blank for a general summary."
@@ -193,13 +265,7 @@ function InsightsPage() {
         </div>
         {insightsError && <p className="ai-analysis-error" role="alert">{insightsError}</p>}
         {insights && (
-          <div className="ai-output-card" aria-live="polite">
-            <div className="ai-output-heading">
-              <strong>AI insight</strong>
-              <span>{insights.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
-            </div>
-            <div className="ai-analysis-content insights-content">{renderAiAnalysis(insights.text)}</div>
-          </div>
+          <AiOutput title="AI insight" source={insights.source} text={insights.text} />
         )}
         {!insights && !insightsError && (
           <p className="insights-hint">Insights will appear here after generation.</p>
@@ -210,22 +276,19 @@ function InsightsPage() {
         subtitle={activeTestSet ? `Interpret the saved metrics for ${activeTestSet}.` : "Select an evaluated test set to compare models."}
         className="insights-panel"
       >
-        <button
-          className="button button-primary"
-          onClick={handleGenerateComparison}
-          disabled={!canCompare || running || comparisonLoading}
-        >
-          {comparisonLoading ? "Generating comparison…" : "Generate comparison"}
-        </button>
+        <div className="comparison-action">
+          <span>Compare precision, recall, F1-score, and false-positive trade-offs.</span>
+          <button
+            className="button button-primary"
+            onClick={handleGenerateComparison}
+            disabled={!canCompare || running || comparisonLoading}
+          >
+            {comparisonLoading ? "Generating comparison…" : "Generate comparison"}
+          </button>
+        </div>
         {comparisonError && <p className="ai-analysis-error" role="alert">{comparisonError}</p>}
         {comparison?.testSet === activeTestSet && (
-          <div className="ai-output-card" aria-live="polite">
-            <div className="ai-output-heading">
-              <strong>Model comparison insight</strong>
-              <span>{comparison.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
-            </div>
-            <div className="ai-analysis-content insights-content">{renderAiAnalysis(comparison.analysis)}</div>
-          </div>
+          <AiOutput title="Model comparison insight" source={comparison.source} text={comparison.analysis} />
         )}
         {!canCompare && !loading && (
           <div className="insights-empty">
