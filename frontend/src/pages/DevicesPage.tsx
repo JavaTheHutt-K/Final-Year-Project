@@ -7,7 +7,10 @@ function DevicesPage() {
   const { config, history, results, loading } = useDashboard();
   const federatedHistory = (history.length ? history : results?.training_history ?? [])
     .filter((entry) => !entry.model || entry.model === "federated");
-  const clientCount = config?.training?.clients ?? 0;
+  const legacyClientIds = new Set(
+    federatedHistory.flatMap((entry) => Object.keys(entry.clients ?? {}).map(normalizeClientId)),
+  );
+  const clientCount = Math.max(config?.training?.clients ?? 0, legacyClientIds.size);
   const latestRound = federatedHistory.reduce(
     (latest, entry) => entry.round > (latest?.round ?? -1) ? entry : latest,
     undefined as (typeof federatedHistory)[number] | undefined,
@@ -15,6 +18,19 @@ function DevicesPage() {
   const latestDetails = new Map<string, ClientRoundDetail>();
   for (const entry of federatedHistory) {
     for (const detail of entry.client_details ?? []) latestDetails.set(detail.client_id, detail);
+    for (const [rawClientId, samples] of Object.entries(entry.clients ?? {})) {
+      const clientId = normalizeClientId(rawClientId);
+      if (!latestDetails.has(clientId)) {
+        latestDetails.set(clientId, {
+          client_id: clientId,
+          partition_id: "recorded partition",
+          status: "completed",
+          availability: "available",
+          selected: true,
+          samples,
+        });
+      }
+    }
   }
   const clients = Array.from({ length: clientCount }, (_, index) => {
     const clientId = `client-${index + 1}`;
@@ -96,6 +112,11 @@ function DevicesPage() {
       </Panel>
     </>
   );
+}
+
+function normalizeClientId(clientId: string): string {
+  const match = /^Client\s+(\d+)$/i.exec(clientId.trim());
+  return match ? `client-${match[1]}` : clientId;
 }
 
 function formatNumber(value: number | undefined, digits = 4): string {
