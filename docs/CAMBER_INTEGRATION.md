@@ -86,9 +86,24 @@ python -m research.analyze results results\results.json --output results\researc
 
 The dataset command reads CSVs in chunks and reports row/column counts, numeric
 feature count, missing values, duplicates, label distribution, and numeric
-mean/standard deviation. The results command extracts measured metrics and
-evaluation metadata from the existing experiment output. It does not infer
-accuracy or training duration when the source result does not contain them.
+mean/standard deviation. CSV fields are read as strings first, then numeric
+values are coerced per chunk. This prevents pandas from silently dropping a
+column's values when different chunks infer different types; mixed columns
+contribute all values that can be parsed as numbers.
+
+Exact duplicate detection is enabled by default and uses a temporary,
+disk-backed SQLite index. It counts every occurrence after the first, including
+duplicates within one chunk, across chunks, and repeated multiple times. The
+index uses disk space proportional to the number of distinct rows rather than
+Python memory proportional to the full dataset. It is deleted when the command
+finishes. Use `--duplicate-detection none` when duplicate counts are not needed;
+this avoids the index but reports `duplicate_rows` as zero. Exact detection is
+still subject to the CSV parser's representation of fields, while numeric
+statistics are based on per-value numeric coercion.
+
+The results command extracts measured metrics and evaluation metadata from the
+existing experiment output. It does not infer accuracy or training duration
+when the source result does not contain them.
 
 ## Limits and remaining setup
 

@@ -41,6 +41,8 @@ training:
   initial_rounds: 5
   update_rounds: 2
   local_epochs: 1
+  participation_fraction: 1.0
+  min_participating_clients: 3
   aggregation: FedAvg
 api:
   host: 0.0.0.0

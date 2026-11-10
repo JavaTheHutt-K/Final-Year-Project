@@ -24,7 +24,9 @@ def test_worker_persists_progress_history_and_completed_results(tmp_path, monkey
 
     assert results["metrics"]["score"] == 0.8
     assert updates[-1]["status"] == "completed"
-    assert updates[-1]["training_history"] == [{"round": 1}]
+    assert updates[-1]["training_history"] == [
+        {"round": 1, "run_id": run_id}
+    ]
     assert updates[-1]["results"]["metrics"]["score"] == 0.8
 
 

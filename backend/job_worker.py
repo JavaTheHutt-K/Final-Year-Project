@@ -117,7 +117,9 @@ def execute_run(run_id: str) -> dict[str, Any]:
 
         def progress(stage: str, detail: dict[str, Any]) -> None:
             if "round" in detail and "model" in detail:
-                history.append(_json_safe(detail))
+                history.append(
+                    _json_safe({**detail, "run_id": run_id})
+                )
             database.update_experiment_run(
                 run_id,
                 {
@@ -130,6 +132,13 @@ def execute_run(run_id: str) -> dict[str, Any]:
 
         results = run_experiment(config_path, progress_callback=progress)
         safe_results = _json_safe(results)
+        if isinstance(safe_results.get("training_history"), list):
+            safe_results["training_history"] = [
+                {**entry, "run_id": run_id}
+                if isinstance(entry, dict)
+                else entry
+                for entry in safe_results["training_history"]
+            ]
         json.dumps(safe_results, allow_nan=False)
         database.update_experiment_run(
             run_id,

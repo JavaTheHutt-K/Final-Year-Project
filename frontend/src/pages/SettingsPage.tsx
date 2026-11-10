@@ -26,6 +26,8 @@ function editableSettings(config: ExperimentConfig): EditableExperimentSettings 
       update_rounds: config.training?.update_rounds ?? 2,
       local_epochs: config.training?.local_epochs ?? 1,
       partition: config.training?.partition === "class_skewed" ? "class_skewed" : "iid",
+      participation_fraction: config.training?.participation_fraction ?? 1,
+      min_participating_clients: config.training?.min_participating_clients ?? config.training?.clients ?? 3,
     },
   };
 }
@@ -213,6 +215,23 @@ function SettingsPage() {
                     <span>Local epochs</span>
                     <input type="number" min="1" max="20" step="1" value={draft.training.local_epochs} onChange={(event) => {
                       setDraft((current) => current && ({ ...current, training: { ...current.training, local_epochs: Number(event.target.value) } }));
+                      setSaved(false);
+                    }} required />
+                  </label>
+                  <label className="setting-control">
+                    <span>Participation fraction</span>
+                    <span className="setting-input-with-unit">
+                      <input type="number" min="1" max="100" step="1" value={Math.round(draft.training.participation_fraction * 100)} onChange={(event) => {
+                        setDraft((current) => current && ({ ...current, training: { ...current.training, participation_fraction: Number(event.target.value) / 100 } }));
+                        setSaved(false);
+                      }} required />
+                      <span>%</span>
+                    </span>
+                  </label>
+                  <label className="setting-control">
+                    <span>Minimum participants</span>
+                    <input type="number" min="1" max={draft.training.clients} step="1" value={draft.training.min_participating_clients} onChange={(event) => {
+                      setDraft((current) => current && ({ ...current, training: { ...current.training, min_participating_clients: Number(event.target.value) } }));
                       setSaved(false);
                     }} required />
                   </label>

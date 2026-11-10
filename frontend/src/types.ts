@@ -34,6 +34,42 @@ export interface TrainingHistoryEntry {
   f1_score: number;
   false_positive_rate: number;
   clients?: Record<string, number>;
+  expected_clients?: number;
+  selected_clients?: string[];
+  successful_participants?: string[];
+  failed_participants?: string[];
+  aggregation_completed?: boolean;
+  global_evaluation?: {
+    loss?: number;
+    precision?: number;
+    recall?: number;
+    f1_score?: number;
+    false_positive_rate?: number;
+  };
+  client_details?: ClientRoundDetail[];
+  run_id?: string;
+}
+
+export type ClientStatus = "registered" | "available" | "selected" | "training" | "completed" | "failed" | "unavailable";
+
+export interface ClientRoundDetail {
+  client_id: string;
+  partition_id: string;
+  status: ClientStatus;
+  availability: "available" | "unavailable" | "unknown";
+  selected: boolean;
+  samples: number;
+  local_training_loss?: number;
+  training_duration_seconds?: number;
+  loss?: number;
+  accuracy?: number;
+  precision?: number;
+  recall?: number;
+  f1_score?: number;
+  false_positive_rate?: number;
+  evaluation_duration_seconds?: number;
+  error?: string | null;
+  last_activity?: string;
 }
 
 export interface CleaningSourceReport {
@@ -111,6 +147,8 @@ export interface ExperimentConfig {
     partition?: string;
     aggregation?: string;
     random_seed?: number;
+    participation_fraction?: number;
+    min_participating_clients?: number;
   };
   paths?: Record<string, string>;
   api?: {
@@ -142,6 +180,8 @@ export interface EditableExperimentSettings {
     update_rounds: number;
     local_epochs: number;
     partition: "iid" | "class_skewed";
+    participation_fraction: number;
+    min_participating_clients: number;
   };
 }
 
@@ -170,6 +210,12 @@ export interface RunStatus {
   model?: ModelId;
   round?: number;
   clients?: Record<string, number>;
+  expected_clients?: number;
+  selected_clients?: string[];
+  successful_participants?: string[];
+  failed_participants?: string[];
+  aggregation_completed?: boolean;
+  client_details?: ClientRoundDetail[];
 }
 
 export interface RunResponse {

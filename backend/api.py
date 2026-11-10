@@ -258,6 +258,21 @@ def _validate_run_config(config: dict[str, Any]) -> None:
         value = training.get(field)
         if type(value) is not int or value < 0 or (field != "random_seed" and value == 0):
             raise HTTPException(status_code=422, detail=f"Training {field} is invalid.")
+    participation_fraction = training.get("participation_fraction", 1.0)
+    if (
+        isinstance(participation_fraction, bool)
+        or not isinstance(participation_fraction, (int, float))
+        or not isfinite(participation_fraction)
+        or not 0 < participation_fraction <= 1
+    ):
+        raise HTTPException(status_code=422, detail="Training participation fraction is invalid.")
+    minimum_clients = training.get("min_participating_clients", training.get("clients"))
+    if (
+        type(minimum_clients) is not int
+        or minimum_clients < 1
+        or minimum_clients > training["clients"]
+    ):
+        raise HTTPException(status_code=422, detail="Minimum participating clients is invalid.")
     fractions = (
         split.get("initial_train_fraction"),
         split.get("update_fraction"),
@@ -302,13 +317,26 @@ def update_config(
             "update_rounds",
             "local_epochs",
             "partition",
+            "participation_fraction",
+            "min_participating_clients",
         },
     }
     if set(payload) != set(editable_fields):
         raise HTTPException(status_code=422, detail="Invalid settings sections")
+    required_fields = {
+        section: fields - {
+            "participation_fraction",
+            "min_participating_clients",
+        }
+        for section, fields in editable_fields.items()
+    }
     for section, allowed_fields in editable_fields.items():
         values = payload[section]
-        if not isinstance(values, dict) or set(values) != allowed_fields:
+        if (
+            not isinstance(values, dict)
+            or not required_fields[section].issubset(values)
+            or not set(values).issubset(allowed_fields)
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=f"Invalid fields in {section} settings",
@@ -351,12 +379,15 @@ def update_config(
         )
 
     training = payload["training"]
+    training.setdefault("participation_fraction", 1.0)
+    training.setdefault("min_participating_clients", training["clients"])
     numeric_limits = {
         "random_seed": (0, 4_294_967_295),
         "clients": (1, 20),
         "initial_rounds": (1, 100),
         "update_rounds": (1, 100),
         "local_epochs": (1, 20),
+        "min_participating_clients": (1, 20),
     }
     for key, (minimum, maximum) in numeric_limits.items():
         value = training[key]
@@ -375,6 +406,21 @@ def update_config(
             detail="Training partition must be iid or class_skewed",
         )
     training["partition"] = partition_name
+    participation_fraction = training["participation_fraction"]
+    if (
+        isinstance(participation_fraction, bool)
+        or not isinstance(participation_fraction, (int, float))
+        or not 0 < participation_fraction <= 1
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Training participation fraction must be between 0 and 1",
+        )
+    if training["min_participating_clients"] > training["clients"]:
+        raise HTTPException(
+            status_code=422,
+            detail="Minimum participating clients cannot exceed the client count",
+        )
 
     with _state_lock:
         if _database_is_configured():
@@ -801,6 +847,13 @@ def get_run_status() -> dict[str, Any]:
             "message": "Ready to run the experiment.",
             "run_id": None,
         }
+    history = run.get("training_history")
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except json.JSONDecodeError:
+            history = []
+    latest = history[-1] if isinstance(history, list) and history else {}
     return {
         "run_id": str(run.get("id", "")),
         "status": run.get("status", "unavailable"),
@@ -808,6 +861,13 @@ def get_run_status() -> dict[str, Any]:
         "message": run.get("message"),
         "error": run.get("error"),
         "cloud_run_execution": run.get("cloud_run_execution"),
+        "round": latest.get("round"),
+        "expected_clients": latest.get("expected_clients"),
+        "selected_clients": latest.get("selected_clients", []),
+        "successful_participants": latest.get("successful_participants", []),
+        "failed_participants": latest.get("failed_participants", []),
+        "aggregation_completed": latest.get("aggregation_completed"),
+        "client_details": latest.get("client_details", []),
     }
 
 

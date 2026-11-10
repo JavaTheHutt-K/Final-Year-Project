@@ -454,6 +454,23 @@ button { cursor: pointer; }
   .dashboard-page .run-status-inline .button { height: 29px; font-size: 8px; }
   .traffic-balance-chart { height: 210px; }
   .participant-status { display: inline-flex; padding: 4px 8px; border-radius: 12px; color: #16835d; background: #e8f7f0; font-size: 8px; }
+  .participant-status.participant-registered { color: #687789; background: #eef2f6; }
+  .participant-status.participant-available,.participant-status.participant-selected { color: #226bb4; background: #eaf3ff; }
+  .participant-status.participant-training { color: #b77920; background: #fff9ee; }
+  .participant-status.participant-failed,.participant-status.participant-unavailable { color: #b74c4c; background: #fff5f5; }
+  .client-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .client-card { min-width: 0; padding: 13px; border: 1px solid #edf0f4; border-radius: 8px; background: #fbfcfe; }
+  .client-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .client-card>small { display: block; margin-top: 6px; color: #8794a4; font-size: 8px; }
+  .client-card-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 13px; }
+  .client-card-metrics span { display: flex; flex-direction: column; gap: 3px; }
+  .client-card-metrics b { color: #40546c; font-size: 11px; }
+  .client-card-metrics small { color: #93a0ae; font-size: 7px; }
+  .client-card p { margin: 9px 0 0; font-size: 8px; }
+  .client-timeline { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+  .client-timeline-entry { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; padding: 10px; border-left: 3px solid #8755ea; background: #faf9ff; }
+  .client-timeline-entry span { color: #52677e; font-size: 8px; }
+  .client-timeline-entry small { grid-column: 1 / -1; color: #8794a4; font-size: 7px; }
 }
 
 @media (min-width: 601px) and (max-width: 820px) {

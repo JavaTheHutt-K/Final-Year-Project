@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useDashboard } from "../DashboardContext";
 import { EmptyState, MetricCard, PageHeading, Panel } from "../components";
+import type { ClientRoundDetail, ClientStatus, TrainingHistoryEntry } from "../types";
 
 function DevicesPage() {
   const { config, history, results, loading } = useDashboard();
@@ -11,64 +12,124 @@ function DevicesPage() {
     (latest, entry) => entry.round > (latest?.round ?? -1) ? entry : latest,
     undefined as (typeof federatedHistory)[number] | undefined,
   );
-  const clients = Object.entries(latestRound?.clients ?? {});
-  const clientRows = clients.length
-    ? clients.map(([clientId, samples], index) => ({
-        clientId,
-        label: `Client ${index + 1}`,
-        samples,
-      }))
-    : Array.from({ length: clientCount }, (_, index) => ({
-        clientId: `configured-client-${index + 1}`,
-        label: `Client ${index + 1}`,
-        samples: undefined,
-      }));
+  const latestDetails = new Map<string, ClientRoundDetail>();
+  for (const entry of federatedHistory) {
+    for (const detail of entry.client_details ?? []) latestDetails.set(detail.client_id, detail);
+  }
+  const clients = Array.from({ length: clientCount }, (_, index) => {
+    const clientId = `client-${index + 1}`;
+    return latestDetails.get(clientId) ?? {
+      client_id: clientId,
+      partition_id: `partition-${index + 1}`,
+      status: "registered" as ClientStatus,
+      availability: "unknown" as const,
+      selected: false,
+      samples: 0,
+    };
+  });
+  const selectedCount = latestRound?.selected_clients?.length ?? 0;
+  const successfulCount = latestRound?.successful_participants?.length ?? 0;
+  const failedCount = latestRound?.failed_participants?.length ?? 0;
 
   return (
     <>
       <PageHeading
         eyebrow="FEDERATED CLIENTS"
         title="Devices"
-        description="Inspect the simulated participants used by federated training. The dataset does not contain real device inventory."
+        description="Monitor simulated Flower clients and their assigned partitions. These are not physical or network devices."
       />
       <div className="metric-grid device-metrics">
-        <MetricCard label="SIMULATED CLIENTS" value={clientCount ? clientCount.toLocaleString() : "—"} note="Configured for federated training" accent="#2587f4" icon="▣" />
+        <MetricCard label="CONFIGURED CLIENTS" value={clientCount ? clientCount.toLocaleString() : "—"} note="Registered simulation clients" accent="#2587f4" icon="▣" />
         <MetricCard label="ROUNDS RECORDED" value={federatedHistory.length ? federatedHistory.length.toLocaleString() : "—"} note="Federated training rounds" accent="#20ad73" icon="↻" />
         <MetricCard label="LATEST ROUND" value={latestRound ? String(latestRound.round) : "—"} note="Most recent client contribution" accent="#8755ea" icon="◷" />
-        <MetricCard label="DEVICE INVENTORY" value="Unavailable" note="Real device telemetry is not collected" accent="#e5a13c" icon="!" />
+        <MetricCard label="ROUND PARTICIPATION" value={latestRound ? `${successfulCount}/${selectedCount}` : "—"} note={`${failedCount} failed · simulation only`} accent="#e5a13c" icon="!" />
       </div>
       <Panel
         title="Federated client participants"
-        subtitle="Simulated training participants · not physical or network devices"
-        action={<Link className="panel-caption" to="/clients">View training details →</Link>}
+        subtitle="Stable IDs, assigned partitions, and measured local evaluation"
+        action={<Link className="panel-caption" to="/settings">Configure future runs →</Link>}
       >
-        {clientRows.length ? (
+        {clients.length ? (
           <div className="table-scroll">
             <table className="data-table">
-              <thead>
-                <tr><th>Participant</th><th>Type</th><th>Latest round</th><th>Training samples</th><th>Status</th></tr>
-              </thead>
-              <tbody>
-                {clientRows.map((client) => (
-                  <tr key={client.clientId}>
-                    <td>{client.label}</td>
-                    <td>Simulated Flower client</td>
-                    <td>{latestRound?.round ?? "—"}</td>
-                    <td>{typeof client.samples === "number" ? client.samples.toLocaleString() : "Not recorded"}</td>
-                    <td><span className="participant-status">{latestRound ? "Recorded" : "Configured"}</span></td>
-                  </tr>
-                ))}
-              </tbody>
+              <thead><tr><th>Client</th><th>Partition</th><th>Samples</th><th>Local loss</th><th>Local F1</th><th>Status</th></tr></thead>
+              <tbody>{clients.map((client) => (
+                <tr key={client.client_id}>
+                  <td>{client.client_id}</td>
+                  <td>{client.partition_id}</td>
+                  <td>{client.samples ? client.samples.toLocaleString() : "—"}</td>
+                  <td>{formatNumber(client.local_training_loss)}</td>
+                  <td>{formatNumber(client.f1_score, 3)}</td>
+                  <td><span className={`participant-status participant-${client.status}`}>{client.status}</span></td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
-        ) : (
-          <EmptyState
-            icon="▣"
-            message={loading ? "Loading federated client configuration…" : "No federated clients are configured. Set training.clients in config.yaml to list simulated participants."}
-          />
-        )}
+        ) : <EmptyState icon="▣" message={loading ? "Loading federated client configuration…" : "No federated clients are configured."} />}
+      </Panel>
+      <div className="page-grid">
+        <Panel title="Client status cards" subtitle="Availability is observed only when Flower returns an update; registration is not online status.">
+          <div className="client-card-grid">{clients.map((client) => <ClientCard key={client.client_id} client={client} round={latestRound?.round} />)}</div>
+        </Panel>
+        <Panel title="Round timeline" subtitle="Aggregate visibility for the selected experiment run">
+          {federatedHistory.length ? (
+            <div className="client-timeline">{federatedHistory.map((entry) => <TimelineEntry key={`${entry.model ?? "federated"}-${entry.round}`} entry={entry} />)}</div>
+          ) : <EmptyState message={loading ? "Loading round activity…" : "Round activity will appear when federated training runs."} />}
+        </Panel>
+      </div>
+      <Panel title="Per-client participation history" subtitle="Measured updates returned by the Flower simulation">
+        {clients.some((client) => latestDetails.has(client.client_id)) ? (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>Round</th><th>Client</th><th>Status</th><th>Training duration</th><th>Evaluation duration</th><th>Recall</th><th>Error</th></tr></thead>
+              <tbody>{federatedHistory.flatMap((entry) => (entry.client_details ?? []).map((client) => (
+                <tr key={`${entry.model ?? "federated"}-${entry.round}-${client.client_id}`}>
+                  <td>{entry.round}</td><td>{client.client_id}</td>
+                  <td><span className={`participant-status participant-${client.status}`}>{client.status}</span></td>
+                  <td>{formatDuration(client.training_duration_seconds)}</td><td>{formatDuration(client.evaluation_duration_seconds)}</td>
+                  <td>{formatNumber(client.recall, 3)}</td><td>{client.error ?? "—"}</td>
+                </tr>
+              )))}</tbody>
+            </table>
+          </div>
+        ) : <EmptyState message="No individual client updates have been recorded yet." />}
       </Panel>
     </>
+  );
+}
+
+function formatNumber(value: number | undefined, digits = 4): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
+}
+
+function formatDuration(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)}s` : "—";
+}
+
+function ClientCard({ client, round }: { client: ClientRoundDetail; round?: number }) {
+  return (
+    <div className="client-card">
+      <div className="client-card-heading"><strong>{client.client_id}</strong><span className={`participant-status participant-${client.status}`}>{client.status}</span></div>
+      <small>{client.partition_id} · {client.availability} · {client.selected ? `round ${round ?? "—"}` : "not selected"}</small>
+      <div className="client-card-metrics">
+        <span><b>{client.samples.toLocaleString()}</b><small>samples</small></span>
+        <span><b>{formatNumber(client.local_training_loss)}</b><small>train loss</small></span>
+        <span><b>{formatNumber(client.f1_score, 3)}</b><small>local F1</small></span>
+      </div>
+      {client.error && <p className="status-error-text">{client.error}</p>}
+      {client.last_activity && <small>Last activity: {new Date(client.last_activity).toLocaleString()}</small>}
+    </div>
+  );
+}
+
+function TimelineEntry({ entry }: { entry: TrainingHistoryEntry }) {
+  const success = entry.successful_participants?.length ?? 0;
+  const selected = entry.selected_clients?.length ?? 0;
+  return (
+    <div className="client-timeline-entry">
+      <strong>Round {entry.round}</strong><span>{success}/{selected} successful</span>
+      <small>{entry.aggregation_completed ? "Aggregation complete" : "Aggregation incomplete"}</small>
+    </div>
   );
 }
 
