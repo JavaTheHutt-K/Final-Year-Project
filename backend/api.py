@@ -61,6 +61,10 @@ class AIComparisonRequest(BaseModel):
     question: str | None = Field(default=None, max_length=2000)
 
 
+class InsightsRequest(BaseModel):
+    question: str | None = Field(default=None, max_length=2000)
+
+
 class AdminLoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
@@ -630,43 +634,89 @@ def _metric_value(metrics: dict[str, Any], name: str) -> float | None:
     return float(value) if isinstance(value, (int, float)) and isfinite(value) else None
 
 
+def _clean_ai_output(analysis: str) -> str:
+    """Remove accidental Markdown emphasis and code delimiters from AI output."""
+    cleaned_lines = []
+    for line in analysis.replace("*", "").replace("`", "").splitlines():
+        line = line.lstrip("#").strip()
+        if "|" in line:
+            line = " - ".join(part.strip() for part in line.split("|") if part.strip())
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
+def _saved_test_set(results: dict[str, Any]) -> str | None:
+    metrics_by_model = results.get("metrics", {})
+    if not isinstance(metrics_by_model, dict):
+        return None
+    for model in ("centralised", "federated", "centralised_updated", "federated_updated"):
+        model_metrics = metrics_by_model.get(model)
+        if isinstance(model_metrics, dict) and model_metrics:
+            return next(iter(model_metrics))
+    return None
+
+
 def _deterministic_comparison(test_set: str, comparison: dict[str, Any]) -> str:
     """Create a transparent interpretation without an external AI service."""
-    centralised = comparison["Centralised"]
-    federated = comparison["Federated"]
-    central_f1 = _metric_value(centralised, "f1_score")
-    federated_f1 = _metric_value(federated, "f1_score")
-    central_recall = _metric_value(centralised, "recall")
-    federated_recall = _metric_value(federated, "recall")
-    central_fpr = _metric_value(centralised, "false_positive_rate")
-    federated_fpr = _metric_value(federated, "false_positive_rate")
-
     lines = [
-        f"Deterministic fallback analysis for the measured {test_set} results.",
+        f"1. Experimental Overview\nDeterministic fallback analysis for the measured {test_set} results.",
         "This interpretation uses only metrics saved by the experiment; it is not Groq-generated.",
     ]
-    if central_f1 is not None and federated_f1 is not None:
-        winner = "centralised" if central_f1 > federated_f1 else "federated"
-        if central_f1 == federated_f1:
-            winner = "both models"
-        lines.append(
-            f"F1-score: centralised {central_f1:.3f}; federated {federated_f1:.3f}. "
-            f"The higher measured F1-score is from {winner}."
+    for label, metrics in comparison.items():
+        measured = "; ".join(
+            f"{name.replace('_', ' ')} {value:.4f}"
+            for name in ("precision", "recall", "f1_score", "false_positive_rate")
+            if (value := _metric_value(metrics, name)) is not None
         )
-    if central_recall is not None and federated_recall is not None:
-        lines.append(
-            f"Recall: centralised {central_recall:.3f}; federated {federated_recall:.3f}. "
-            "Recall indicates the proportion of malicious samples detected."
+        confusion_matrix = metrics.get("confusion_matrix")
+        false_negatives = (
+            confusion_matrix.get("fn")
+            if isinstance(confusion_matrix, dict)
+            and isinstance(confusion_matrix.get("fn"), (int, float))
+            else None
         )
-    if central_fpr is not None and federated_fpr is not None:
+        if false_negatives is not None:
+            measured += f"; false negatives {false_negatives:.0f}"
+        if measured:
+            lines.append(f"{label}: {measured}.")
+
+    leaders = (
+        ("highest F1-score", "f1_score", max),
+        ("highest recall", "recall", max),
+        ("lowest false-positive rate", "false_positive_rate", min),
+    )
+    for description, metric_name, selector in leaders:
+        available = [
+            (label, value)
+            for label, metrics in comparison.items()
+            if (value := _metric_value(metrics, metric_name)) is not None
+        ]
+        if available:
+            best_value = selector(value for _, value in available)
+            best_labels = [label for label, value in available if value == best_value]
+            lines.append(
+                f"The {description} is {best_value:.4f}, recorded by "
+                f"{', '.join(best_labels)}."
+            )
+    false_negative_counts = [
+        (label, metrics["confusion_matrix"]["fn"])
+        for label, metrics in comparison.items()
+        if isinstance(metrics.get("confusion_matrix"), dict)
+        and isinstance(metrics["confusion_matrix"].get("fn"), (int, float))
+    ]
+    if false_negative_counts:
+        best_fn = min(value for _, value in false_negative_counts)
+        best_labels = [label for label, value in false_negative_counts if value == best_fn]
         lines.append(
-            f"False-positive rate: centralised {central_fpr:.3f}; "
-            f"federated {federated_fpr:.3f}."
+            f"The lowest number of false negatives is {best_fn:.0f}, recorded by "
+            f"{', '.join(best_labels)}."
         )
-    if "Centralised (updated)" in comparison and "Federated (updated)" in comparison:
-        lines.append(
-            "Updated centralised and federated metrics are also available in the saved results."
-        )
+    lines.append(
+        "Recall indicates the proportion of malicious samples detected; false negatives "
+        "are attacks that were not detected. Precision reflects the proportion of "
+        "predicted attacks that were correct, while the false-positive rate reflects "
+        "benign samples incorrectly flagged."
+    )
     lines.append("These comparisons describe this holdout only and do not establish statistical significance.")
     return "\n".join(lines)
 
@@ -691,21 +741,44 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
         logger.info("Groq is not configured; returning deterministic comparison.")
         return fallback_response
 
-    prompt = (
-        "Interpret the supplied intrusion-detection evaluation metrics. Compare "
-        "centralised and federated approaches, including updated variants if "
-        "present. Explain tradeoffs using only the supplied metrics, pay particular "
-        "attention to recall and false negatives, and do not claim statistical "
-        "significance or infer causes. State that these are measured results and "
-        "your text is an interpretation. Be concise.\n\n"
-        + json.dumps({"test_set": payload.test_set, "metrics": comparison})
-    )
-    if payload.question and payload.question.strip():
-        prompt += (
-            "\n\nAnswer this user question using only the supplied metrics. "
-            "If the metrics do not support an answer, say so clearly:\n"
-            + payload.question.strip()
+    question = payload.question.strip() if payload.question and payload.question.strip() else None
+    if question:
+        prompt = (
+            "Answer the following question directly using only the supplied saved "
+            "intrusion-detection metrics. Begin with the direct answer, then include "
+            "only relevant sections from: 1. Direct Answer, 2. Relevant Experimental "
+            "Evidence, 3. Technical Interpretation, 4. Comparison of Model Performance, "
+            "5. Limitations, and 6. Conclusion. Reference measured metrics, explain "
+            "precision, recall, F1-score, false-positive rate, false positives, and "
+            "false negatives accurately, and explain the practical meaning of missed "
+            "attacks and false alarms when relevant. Compare centralised and federated "
+            "approaches when relevant. If the supplied data is insufficient, state "
+            "that explicitly. Avoid repetition and unsupported explanations. State "
+            "that conclusions apply only to the supplied holdout test set. Do not "
+            "invent causes, statistical significance, or findings. Format metrics to "
+            "four decimal places where appropriate.\n\n"
+            f"Question: {question}\n\n"
         )
+    else:
+        prompt = (
+            "Prepare a professional experimental analysis of the supplied intrusion-detection "
+            "evaluation metrics for a final-year Computer Science research project. Begin "
+            "with a brief explanation of what is being compared. Use the following numbered "
+            "sections: 1. Experimental Overview, 2. Original Centralised vs Federated "
+            "Comparison, 3. Updated Centralised vs Federated Comparison, 4. Precision "
+            "and False-Positive Analysis, 5. Recall and False-Negative Analysis, "
+            "6. Overall F1-Score Comparison, 7. Performance Trade-offs, 8. Research "
+            "Findings and Conclusion, and 9. Experimental Limitations. Omit sections "
+            "that are not relevant or cannot be supported by the supplied metrics. "
+            "Compare all available configurations and identify the highest F1-score, "
+            "highest recall, lowest false-positive rate, and lowest number of false "
+            "negatives. Explain why these metrics matter in intrusion detection without "
+            "inventing causes or claiming universal superiority. State when a metric "
+            "was not provided and that conclusions apply only to the supplied holdout "
+            "test set. Use only the supplied metrics and format them to four decimal "
+            "places where appropriate.\n\n"
+        )
+    prompt += json.dumps({"test_set": payload.test_set, "metrics": comparison})
     try:
         from groq import Groq
 
@@ -716,7 +789,31 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
                     "role": "system",
                     "content": (
                         "You interpret saved intrusion-detection metrics only. "
-                        "Do not request or infer dataset contents."
+                        "Return plain text only. Never use asterisks, Markdown bold, "
+                        "Markdown italics, Markdown tables, backticks, or Markdown "
+                        "headings beginning with #, or pipe characters used as table "
+                        "delimiters. Use numbered section headings appropriate to the "
+                        "request. For comparisons, use sections for the experimental "
+                        "overview, original and updated centralised versus federated "
+                        "performance, precision and false-positive analysis, recall "
+                        "and false-negative analysis, F1-score comparison, trade-offs, "
+                        "findings, and limitations. For questions, use only relevant "
+                        "sections for the direct answer, evidence, interpretation, "
+                        "comparison, limitations, and conclusion. Use short, "
+                        "well-structured paragraphs and "
+                        "numbered lists where appropriate. Use professional academic "
+                        "language suitable for a final-year Computer Science research "
+                        "project. Format metrics consistently to four decimal places "
+                        "where appropriate. Avoid repetition and unnecessary "
+                        "introductory language. Clearly distinguish measured results "
+                        "from interpretations. Do not invent metrics, causes, "
+                        "statistical significance, or experimental findings. State "
+                        "when a metric was not provided, explain recall, false "
+                        "negatives, precision, false positives, and F1-score "
+                        "accurately, and compare all four configurations when metrics "
+                        "are available. Explicitly state that conclusions apply only "
+                        "to the supplied holdout test set. Do not request or infer "
+                        "dataset contents."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -747,9 +844,13 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
     if not isinstance(analysis, str) or not analysis.strip():
         logger.warning("Groq returned an empty comparison; returning deterministic comparison.")
         return fallback_response
+    cleaned_analysis = _clean_ai_output(analysis)
+    if not cleaned_analysis:
+        logger.warning("Groq returned no usable comparison after output cleaning; returning deterministic comparison.")
+        return fallback_response
     return {
         "test_set": payload.test_set,
-        "analysis": analysis.strip(),
+        "analysis": cleaned_analysis,
         "source": "groq",
         "model": model,
     }
@@ -757,7 +858,7 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
 
 @app.post("/api/insights")
 def generate_insights(
-    payload: AIComparisonRequest | None = None,
+    payload: InsightsRequest | None = None,
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     """Generate an interpretation of the latest successful experiment metrics."""
@@ -770,13 +871,17 @@ def generate_insights(
         _ai_comparison_active = True
     try:
         results = get_results()
-        test_set = next(iter(results.get("metrics", {}).get("federated", {})), None)
+        test_set = _saved_test_set(results)
         if not test_set:
-            raise HTTPException(status_code=404, detail="No completed federated metrics are available.")
+            raise HTTPException(status_code=404, detail="No completed experiment metrics are available.")
         comparison = _request_ai_comparison(
             AIComparisonRequest(
                 test_set=test_set,
-                question=payload.question if payload else None,
+                question=(
+                    payload.question.strip()
+                    if payload and payload.question and payload.question.strip()
+                    else None
+                ),
             )
         )
         latest = _db_call(database.get_latest_completed_run) if _database_is_configured() else None

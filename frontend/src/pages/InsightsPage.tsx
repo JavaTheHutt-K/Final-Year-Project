@@ -1,7 +1,51 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { generateAiInsights, getAIComparison, getApiErrorMessage } from "../api";
 import { useDashboard } from "../DashboardContext";
 import { EmptyState, PageHeading, Panel } from "../components";
+
+const sectionHeadingPattern = /^\d+\.\s+\S/;
+const listItemPattern = /^[-•]\s+/;
+
+function renderAiAnalysis(text: string) {
+  const normalized = text
+    .replace(/\*/g, "")
+    .replace(/`/g, "")
+    .replace(/^\s*#+\s*/gm, "")
+    .replace(/\|/g, " - ");
+
+  const elements: ReactElement[] = [];
+  let listItems: ReactElement[] = [];
+  const flushList = () => {
+    if (listItems.length) {
+      elements.push(<ul key={`list-${elements.length}`}>{listItems}</ul>);
+      listItems = [];
+    }
+  };
+
+  normalized.split(/\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      elements.push(<div className="ai-analysis-spacer" key={`spacer-${index}`} />);
+      return;
+    }
+    if (sectionHeadingPattern.test(trimmed)) {
+      flushList();
+      elements.push(<h3 key={`heading-${index}`}>{trimmed}</h3>);
+      return;
+    }
+    if (listItemPattern.test(trimmed)) {
+      listItems.push(
+        <li key={`item-${index}`}>{trimmed.replace(listItemPattern, "")}</li>,
+      );
+      return;
+    }
+    flushList();
+    elements.push(<p key={`paragraph-${index}`}>{trimmed}</p>);
+  });
+  flushList();
+  return elements;
+}
 
 function InsightsPage() {
   const { results, testSets, selectedTestSet, loading, running } = useDashboard();
@@ -98,7 +142,7 @@ function InsightsPage() {
               <strong>AI insight</strong>
               <span>{insights.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
             </div>
-            <div className="ai-analysis-content insights-content">{insights.text}</div>
+            <div className="ai-analysis-content insights-content">{renderAiAnalysis(insights.text)}</div>
           </div>
         )}
         {!insights && !insightsError && (
@@ -124,7 +168,7 @@ function InsightsPage() {
               <strong>Model comparison insight</strong>
               <span>{comparison.source === "groq" ? "Groq-generated" : "Deterministic fallback"}</span>
             </div>
-            <div className="ai-analysis-content insights-content">{comparison.analysis}</div>
+            <div className="ai-analysis-content insights-content">{renderAiAnalysis(comparison.analysis)}</div>
           </div>
         )}
         {!canCompare && !loading && (

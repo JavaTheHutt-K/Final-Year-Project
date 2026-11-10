@@ -185,7 +185,7 @@ export interface AiInsightsResponse {
 export async function generateAiInsights(question?: string): Promise<AiInsightsResponse> {
   const { data } = await api.post<AiInsightsResponse>(
     "/api/insights",
-    question?.trim() ? { question: question.trim() } : undefined,
+    question?.trim() ? { question: question.trim() } : {},
     { timeout: 45_000 },
   );
   return data;
