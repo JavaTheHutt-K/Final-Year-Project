@@ -86,7 +86,7 @@ list of exact origins. For Cloud Run deployment configuration and limitations, s
 The results page can optionally request an AI explanation of a completed
 centralised-versus-federated comparison. Configure `AI_PROVIDER=groq`,
 `GROQ_API_KEY`, and optionally `GROQ_MODEL` on the backend. The default model is
-`llama-3.3-70b-versatile`, which is listed as a production model in the
+`openai/gpt-oss-120b`, which is configured for the
 [Groq supported-model catalogue](https://console.groq.com/docs/models). The
 request sends only the selected test set's summary metrics to Groq's
 server-side chat-completions API; it never sends the dataset or model artifacts.
@@ -97,6 +97,12 @@ empty responses use the deterministic fallback. Responses identify whether the
 source was `groq` or `deterministic-fallback`. The Insights page also accepts an
 optional user question; it is sent as context to the backend with the same
 metrics-only restriction and is limited to 2,000 characters.
+
+For local development, the backend automatically loads environment variables
+from the repository `.env` file. Set `GRADIO_ADMIN_USERNAME`,
+`ADMIN_PASSWORD_HASH`, and `ADMIN_TOKEN_SECRET` there before signing in. Keep
+`.env` out of source control and never put backend secrets in frontend
+`VITE_*` variables.
 
 ## Deploy the frontend to Vercel
 

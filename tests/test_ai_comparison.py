@@ -35,7 +35,7 @@ def saved_results():
 def test_groq_comparison_uses_saved_completed_metrics(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "backend-test-key")
-    monkeypatch.setenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
     monkeypatch.setattr(api, "get_results", saved_results)
     captured = {}
 
@@ -58,9 +58,10 @@ def test_groq_comparison_uses_saved_completed_metrics(monkeypatch):
         "test_set": "Random holdout",
         "analysis": "Federated recall is higher.",
         "source": "groq",
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
     }
-    assert captured["model"] == "llama-3.3-70b-versatile"
+    assert captured["model"] == "openai/gpt-oss-120b"
+    assert captured["max_tokens"] == 600
     assert "Random holdout" in captured["messages"][1]["content"]
     assert "traffic" not in captured["messages"][1]["content"].lower()
     assert "cicids2017" not in captured["messages"][1]["content"].lower()
@@ -257,7 +258,7 @@ def test_ai_endpoints_preserve_response_contract(monkeypatch):
         "test_set": "Random holdout",
         "analysis": "Groq analysis",
         "source": "groq",
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
     }
     monkeypatch.setattr(api, "_request_ai_comparison", lambda _payload: response_payload)
     monkeypatch.setattr(api, "get_results", saved_results)

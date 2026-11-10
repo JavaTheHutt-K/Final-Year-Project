@@ -18,6 +18,7 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 from backend import database
 from backend.auth import (
@@ -28,6 +29,10 @@ from backend.auth import (
 from backend.cloudrun import launch_training_job
 from backend.data_prep import _resolve_output_path
 from backend.settings import DatabaseSettings
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _optional_env(name: str, default: str | None = None) -> str | None:
@@ -44,7 +49,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 CONFIG_PATH = Path(_optional_env("IDS_CONFIG_PATH") or PROJECT_ROOT / "config.yaml")
@@ -673,7 +677,7 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
     fallback = _deterministic_comparison(payload.test_set, comparison)
     provider = (_optional_env("AI_PROVIDER", "groq") or "groq").lower()
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    model = _optional_env("GROQ_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile"
+    model = _optional_env("GROQ_MODEL", "openai/gpt-oss-120b") or "openai/gpt-oss-120b"
     fallback_response = {
         "test_set": payload.test_set,
         "analysis": fallback,
@@ -718,6 +722,7 @@ def _request_ai_comparison(payload: AIComparisonRequest) -> dict[str, Any]:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
+            max_tokens=600,
         )
     except ImportError:
         logger.warning("Groq support is unavailable; returning deterministic comparison.")

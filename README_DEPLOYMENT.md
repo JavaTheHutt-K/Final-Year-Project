@@ -43,12 +43,12 @@ port. The Vite frontend remains a separate Vercel deployment.
 From the repository root:
 
 ```sh
-docker build -t adaptive-ids-api .
+docker build -t ids-api .
 docker run --rm -p 8080:8080 \
   -e FRONTEND_URL=http://localhost:5173 \
   -e IDS_DATA_DIR=/mnt/datasets \
   -v /absolute/path/to/dataset-directory:/mnt/datasets:ro \
-  adaptive-ids-api
+  ids-api
 ```
 
 The mounted directory must contain
@@ -88,9 +88,9 @@ service and `http://localhost:8080/` for the Gradio dashboard.
    an execution. The object name comes from `dataset.gcs_object` (or
    `dataset.source_file` when omitted).
 8. Configure `AI_PROVIDER=groq`, `GROQ_API_KEY`, and optionally `GROQ_MODEL` on
-   the API service. The default model is `llama-3.3-70b-versatile`, verified
-   against Groq's supported-model catalogue and called through the official
-   `groq` Python SDK. Never use `VITE_*` variables for this key. Groq failures,
+   the API service. The default model is `openai/gpt-oss-120b`, called through
+   the official `groq` Python SDK. Never use `VITE_*` variables for this key.
+   Groq failures,
    rate limits, exhausted quotas, timeouts, invalid credentials, unavailable
    models, and empty responses use the deterministic metrics fallback.
 9. Create a PBKDF2-SHA256 password hash for `ADMIN_PASSWORD_HASH`, set a random
@@ -103,8 +103,8 @@ For example, the following shows the relevant Cloud Run deployment options;
 replace the project, region, bucket, and image values with your own:
 
 ```sh
-gcloud run deploy adaptive-ids-api \
-  --image REGION-docker.pkg.dev/PROJECT/REPOSITORY/adaptive-ids-api:TAG \
+gcloud run deploy ids-api \
+  --image REGION-docker.pkg.dev/PROJECT/REPOSITORY/ids-api:TAG \
   --region REGION \
   --port 8080 \
   --cpu 4 \
@@ -114,8 +114,8 @@ gcloud run deploy adaptive-ids-api \
   --set-env-vars FRONTEND_URL=https://your-project.vercel.app,IDS_DATA_DIR=/mnt/datasets,IDS_RESULTS_DIR=/tmp/ids-results \
   --no-allow-unauthenticated
 
-gcloud run jobs deploy adaptive-ids-training \
-  --image REGION-docker.pkg.dev/PROJECT/REPOSITORY/adaptive-ids-api:TAG \
+gcloud run jobs deploy ids-training-job \
+  --image REGION-docker.pkg.dev/PROJECT/REPOSITORY/ids-api:TAG \
   --region REGION \
   --command python \
   --args=-m,backend.job_worker \
